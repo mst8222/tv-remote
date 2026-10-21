@@ -62,6 +62,11 @@ public class ProtocolTest {
         tc_list_wrong_token();
         tc_list_empty();
         tc_key_unsupported();
+        tc_keylong_ok();
+        tc_keylong_unsupported();
+        tc_keylong_missing_code();
+        tc_keylong_wrong_token();
+        tc_keylong_a11y_off();
         tc_a11y_off();
         tc_unknown_cmd();
         tc_empty_line();
@@ -302,6 +307,40 @@ public class ProtocolTest {
     /** SPEC-014：未知 keycode 明确返回 ERR cmd，不再假装执行成功 */
     static void tc_key_unsupported() throws Exception {
         eq("key_unsupported", "ERR cmd", rawCmd("KEY " + box.token() + " 99"));
+    }
+
+    /** SPEC-018：KEYLONG 仅支持 OK（23），走无障碍 ACTION_LONG_CLICK */
+    static void tc_keylong_ok() throws Exception {
+        LanClient lan = newClient();
+        try {
+            lan.keyLong(23); // 不抛异常即通过
+            record("keylong_ok", true, "KEYLONG 23 应返回 OK");
+            eq("keylong_records_keycode", "23", box.lastLongKeycode);
+        } finally {
+            lan.close();
+        }
+    }
+
+    static void tc_keylong_unsupported() throws Exception {
+        eq("keylong_unsupported", "ERR cmd", rawCmd("KEYLONG " + box.token() + " 19"));
+    }
+
+    static void tc_keylong_missing_code() throws Exception {
+        eq("keylong_missing_code", "ERR arg", rawCmd("KEYLONG " + box.token()));
+        eq("keylong_non_numeric", "ERR arg", rawCmd("KEYLONG " + box.token() + " abc"));
+    }
+
+    static void tc_keylong_wrong_token() throws Exception {
+        eq("keylong_wrong_token", "ERR auth", rawCmd("KEYLONG deadbeef 23"));
+    }
+
+    static void tc_keylong_a11y_off() throws Exception {
+        box.a11yEnabled = false;
+        try {
+            eq("keylong_a11y_off", "ERR a11y", rawCmd("KEYLONG " + box.token() + " 23"));
+        } finally {
+            box.a11yEnabled = true;
+        }
     }
 
     /** SPEC-014：无障碍关闭时，仅需要无障碍的命令失败；音量/APP/LIST 不受影响 */

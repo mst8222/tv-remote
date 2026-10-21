@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.Set;
@@ -16,6 +17,7 @@ import java.util.concurrent.Executor;
 /**
  * 手机作为蓝牙 HID 键盘/遥控器（Android 9+ / API 28+）。
  * 不依赖网络、不需要开发者选项、配对后重启自动回连。
+ * SPEC-018：描述符同时提供键盘、消费者控制与鼠标报告，供飞鼠使用。
  *
  * 注意：Android 文档明确说明「应用退到后台会被系统自动注销 HID 注册」，
  * 因此本类需要配合前台 Activity 使用。
@@ -28,8 +30,13 @@ public class BtHid {
     public static final int RID_KEY = 1;
     /** 消费者控制 Report ID（音量等） */
     public static final int RID_CONSUMER = 2;
+    /** 鼠标 Report ID（SPEC-018 飞鼠） */
+    public static final int RID_MOUSE = 3;
 
-    /** HID 报告描述符（键盘 Report 1 + 消费者控制 Report 2），先用 int 写再转 byte */
+    /** 鼠标按键位：左键（飞鼠模式下 OK 键） */
+    public static final int MOUSE_LEFT = 1;
+
+    /** HID 报告描述符（键盘 Report 1 + 消费者控制 Report 2 + 鼠标 Report 3），先用 int 写再转 byte */
     private static final int[] DESC_RAW = {
             0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
             0x85, 0x01,
@@ -45,6 +52,17 @@ public class BtHid {
             0x85, 0x02,
             0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03,
             0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
+            0xC0,
+            // SPEC-018 鼠标：按键 3 位 + 相对 X/Y（int8）
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
+            0x85, 0x03,
+            0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+            0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+            0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+            0xC0,
             0xC0
     };
 
@@ -85,6 +103,11 @@ public class BtHid {
     private StateListener listener;
     private boolean registered;
     private boolean supported = true;
+    /** SPEC-018：鼠标按键状态位（1=左键） */
+    private int mouseButtons = 0;
+    /** SPEC-018：两次鼠标报告之间的累计位移与上次发送时间 */
+    private int pendX = 0, pendY = 0;
+    private long lastMouseAt = 0;
 
     public BtHid(Context c) {
         this.ctx = c.getApplicationContext();
@@ -129,7 +152,7 @@ public class BtHid {
     private void register() {
         BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
                 "Koco Remote", "TV Remote", "Koco",
-                BluetoothHidDevice.SUBCLASS1_KEYBOARD, DESCRIPTOR);
+                BluetoothHidDevice.SUBCLASS1_COMBO, DESCRIPTOR);
 
         BluetoothHidDevice.Callback cb = new BluetoothHidDevice.Callback() {
             @Override
@@ -148,13 +171,18 @@ public class BtHid {
                     target = device;
                     if (listener != null) listener.onConnectionChanged(device, true);
                 } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                    // SPEC-018：断开后清掉按键/鼠标残留状态，避免重连后光标或按键卡住
+                    mouseButtons = 0;
+                    pendX = 0;
+                    pendY = 0;
                     if (listener != null) listener.onConnectionChanged(device, false);
                 }
             }
         };
 
         try {
-            hid.registerApp(sdp, null, null, exec, cb);
+            boolean queued = hid.registerApp(sdp, null, null, exec, cb);
+            Log.i(TAG, "registerApp descLen=" + DESCRIPTOR.length + " queued=" + queued);
         } catch (Exception e) {
             supported = false;
             if (listener != null) listener.onSupport(false, "注册 HID 失败：" + e.getMessage());
@@ -174,6 +202,7 @@ public class BtHid {
 
     public void disconnect() {
         // 先清空目标：切换设备后未连接新目标时，按键不得继续发往旧盒子（SPEC-015）
+        releaseAll(); // SPEC-018：先释放按键/鼠标状态再断开
         BluetoothDevice d = target;
         target = null;
         if (hid != null && d != null) {
@@ -188,22 +217,104 @@ public class BtHid {
 
     /** 发送键盘按键（按下 + 自动抬起），返回是否成功入队 */
     public boolean sendKey(int usage) {
+        if (!sendKeyDown(usage)) return false;
+        final BluetoothDevice d = target;
+        main.postDelayed(() -> sendKeyUpTo(d), 35);
+        return true;
+    }
+
+    /** SPEC-018：只发按下，由调用方在抬手时发释放（实体遥控器的长按语义） */
+    public boolean sendKeyDown(int usage) {
         if (!isReady()) return false;
         BluetoothDevice d = target;
         if (d == null) return false;
         final byte[] down = new byte[]{0, 0, (byte) usage, 0, 0, 0, 0, 0};
-        final byte[] up = new byte[]{0, 0, 0, 0, 0, 0, 0, 0};
         try {
             boolean ok = hid.sendReport(d, RID_KEY, down);
-            Log.i(TAG, "sendKey usage=0x" + Integer.toHexString(usage) + " ok=" + ok);
-            main.postDelayed(() -> {
-                try { hid.sendReport(d, RID_KEY, up); } catch (Exception ignored) {}
-            }, 35);
+            Log.i(TAG, "sendKeyDown usage=0x" + Integer.toHexString(usage) + " ok=" + ok);
             return ok;
         } catch (Exception e) {
-            Log.e(TAG, "sendKey fail", e);
+            Log.e(TAG, "sendKeyDown fail", e);
             return false;
         }
+    }
+
+    /** SPEC-018：释放键盘按键（全 0 报告即无按键按下） */
+    public boolean sendKeyUp() {
+        return sendKeyUpTo(target);
+    }
+
+    private boolean sendKeyUpTo(BluetoothDevice d) {
+        if (!isReady() || d == null) return false;
+        final byte[] up = new byte[]{0, 0, 0, 0, 0, 0, 0, 0};
+        try {
+            return hid.sendReport(d, RID_KEY, up);
+        } catch (Exception e) {
+            Log.e(TAG, "sendKeyUp fail", e);
+            return false;
+        }
+    }
+
+    /**
+     * SPEC-018 飞鼠：发送鼠标相对位移（按键状态保持）。
+     * 传感器事件约 20ms 一次；更密集的事件先累计，到间隔再合并发送，
+     * 避免 HID 队列堆积造成光标的滞后漂移。
+     */
+    public boolean sendMouseMove(int dx, int dy) {
+        if (!isReady()) return false;
+        BluetoothDevice d = target;
+        if (d == null) return false;
+        pendX += dx;
+        pendY += dy;
+        long now = SystemClock.uptimeMillis();
+        if (now - lastMouseAt < 20) return true;
+        lastMouseAt = now;
+        int x = clampMove(pendX), y = clampMove(pendY);
+        pendX = 0;
+        pendY = 0;
+        return sendMouseReport(d, x, y);
+    }
+
+    /** SPEC-018 飞鼠：设置鼠标按键（1=左键按下，0=释放） */
+    public boolean sendMouseButton(int buttons) {
+        if (!isReady()) return false;
+        BluetoothDevice d = target;
+        if (d == null) return false;
+        mouseButtons = buttons & 0x03;
+        pendX = 0;
+        pendY = 0;
+        lastMouseAt = SystemClock.uptimeMillis();
+        return sendMouseReport(d, 0, 0);
+    }
+
+    private boolean sendMouseReport(BluetoothDevice d, int x, int y) {
+        final byte[] r = new byte[]{(byte) mouseButtons, (byte) x, (byte) y};
+        try {
+            boolean ok = hid.sendReport(d, RID_MOUSE, r);
+            if (!ok) Log.w(TAG, "sendMouseReport not queued");
+            return ok;
+        } catch (Exception e) {
+            Log.e(TAG, "sendMouseReport fail", e);
+            return false;
+        }
+    }
+
+    /** -20..20，单次报告位移过大时盒子光标会瞬移 */
+    private static int clampMove(int v) {
+        return Math.max(-20, Math.min(20, v));
+    }
+
+    /** SPEC-018：释放所有按键与鼠标状态（退出飞鼠/断开前调用，防卡住） */
+    public void releaseAll() {
+        BluetoothDevice d = target;
+        mouseButtons = 0;
+        pendX = 0;
+        pendY = 0;
+        if (hid == null || d == null) return;
+        try { hid.sendReport(d, RID_MOUSE, new byte[]{0, 0, 0}); } catch (Exception ignored) {}
+        try {
+            hid.sendReport(d, RID_KEY, new byte[]{0, 0, 0, 0, 0, 0, 0, 0});
+        } catch (Exception ignored) {}
     }
 
     /** 发送消费者控制（音量等），同样按下 + 抬起，返回是否成功入队 */
@@ -226,6 +337,7 @@ public class BtHid {
     }
 
     public void stop() {
+        releaseAll(); // SPEC-018：退出前释放按键/鼠标状态
         try {
             if (hid != null) {
                 hid.disconnect(target);

@@ -90,5 +90,7 @@ spec/
 | SPEC-014 | 盒端无 root 控制（无障碍服务注入） | implemented |
 | SPEC-015 | 按设备记忆连接方式 | developing（AC-5/AC-6 待手工） |
 | SPEC-016 | 应用快捷动态列表 | implemented |
+| SPEC-017 | 基于 GitHub Release 的 OTA 更新 | implemented |
+| SPEC-018 | OK 键长按与陀螺仪飞鼠 | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。

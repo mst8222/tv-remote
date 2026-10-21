@@ -34,6 +34,8 @@ public class MockBoxServer implements AutoCloseable {
 
     // 最近一次命令的语义记录（供测试断言）
     public volatile String lastKeycode;
+    /** SPEC-018：最近一次长按命令的 keycode */
+    public volatile String lastLongKeycode;
     public volatile String lastTextRaw;       // base64 解码后的原始文本
     public volatile String lastTextProcessed; // ACTION_SET_TEXT 原样写入的文本
     public volatile String lastPkg;
@@ -122,6 +124,17 @@ public class MockBoxServer implements AutoCloseable {
                     }
                     return keyevent(code);
                 }
+                case "KEYLONG": {
+                    // SPEC-018：长按，仅 OK（23）支持
+                    if (p.length < 3) return "ERR arg";
+                    int code;
+                    try {
+                        code = Integer.parseInt(p[2].trim());
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    return keyLong(code);
+                }
                 case "TEXT": {
                     if (p.length < 3) return "ERR arg";
                     String txt = new String(Base64.getDecoder().decode(p[2]), StandardCharsets.UTF_8);
@@ -156,6 +169,14 @@ public class MockBoxServer implements AutoCloseable {
             default:
                 return "ERR cmd";
         }
+    }
+
+    /** SPEC-018：模拟长按注入（ACTION_LONG_CLICK）：只支持 OK（23） */
+    private String keyLong(int code) {
+        lastLongKeycode = String.valueOf(code);
+        if (code != 23) return "ERR cmd";
+        if (!a11yEnabled) return "ERR a11y";
+        return "OK";
     }
 
     /** 模拟无障碍 ACTION_SET_TEXT：原样写入，不转义；无障碍关闭时不可用 */
