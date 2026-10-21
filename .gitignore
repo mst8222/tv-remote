@@ -1,0 +1,28 @@
+# 构建中间产物
+classes/
+dexout/
+base.apk
+aligned.apk
+unsigned.apk
+*.idsig
+*.class
+gen/
+app/res.zip
+server/res.zip
+
+# 由 build.py 自动生成的密钥常量（内含私钥，绝不入库）
+app/src/com/koco/tvremote/KeyConst.java
+
+# 构建输出
+dist/
+
+# 密钥与签名文件（敏感，绝不入库）
+keys/
+
+# 本地智能体工作区（非交付文档）
+.trae/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+Desktop.ini

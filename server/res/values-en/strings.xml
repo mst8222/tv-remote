@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 盒子端英文文案（SPEC-009）；跟随盒子系统语言，无应用内切换 -->
+<resources>
+    <string name="app_name">TV Remote Service</string>
+
+    <!-- 界面 -->
+    <string name="ui_title">TV Remote Service</string>
+    <string name="ui_running">Service running</string>
+    <string name="ui_grp_status">Service</string>
+    <string name="ui_grp_pair">Pair code</string>
+    <string name="ui_grp_addr">Address</string>
+    <string name="ui_local_addr">Local address: %1$s  Port: %2$d\nDiscovery port: %3$d</string>
+    <string name="ui_no_network">No network</string>
+    <string name="ui_a11y_ok">Accessibility service: enabled (keys ready)</string>
+    <string name="ui_a11y_missing">Accessibility service: off (tap to enable, required for remote control)</string>
+    <string name="ui_tip">First run: enable "TV Remote Service" in system Settings → Accessibility. No root required.\nThen choose "Direct" or "BT" in the phone app and enter the 6-digit pairing code above.\nThe service starts automatically on every boot (including after power loss).</string>
+    <string name="a11y_desc">Receives remote commands from the phone and performs back, home, D-pad, volume and text input actions.</string>
+
+    <!-- 前台通知 -->
+    <string name="ntf_channel">Remote service</string>
+    <string name="ntf_title">TV Remote Service</string>
+    <string name="ntf_running">Remote service running</string>
+</resources>

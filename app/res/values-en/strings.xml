@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手机端英文文案（SPEC-009）；应用快捷名保持原名（应用名不翻译） -->
+<resources>
+    <!-- 应用 -->
+    <string name="app_name">TV Remote</string>
+
+    <!-- 模式与操作 -->
+    <string name="mode_lan">Direct</string>
+    <string name="mode_bt">BT</string>
+    <string name="scan">Scan</string>
+    <string name="add">Add</string>
+    <string name="send">Send</string>
+    <string name="input_hint">Enter text (search / account)</string>
+
+    <!-- 系统按键 -->
+    <string name="key_back">Back</string>
+    <string name="key_home">Home</string>
+    <string name="key_menu">Menu</string>
+    <string name="key_power">Power</string>
+    <string name="key_vol_up">Vol+</string>
+    <string name="key_vol_down">Vol−</string>
+    <string name="key_mute">Mute</string>
+
+    <!-- 应用快捷（应用名不翻译） -->
+    <string name="app_settings">Settings</string>
+
+    <!-- 状态栏 -->
+    <string name="switching">Switching…</string>
+    <string name="lan_status">Direct · %1$s</string>
+    <string name="lan_paired_status">Direct · %1$s (paired)</string>
+    <string name="pairing">Pairing %1$s …</string>
+    <string name="paired">Paired · %1$s</string>
+    <string name="discovering">Listening for box broadcast…</string>
+    <string name="discovered">Box found %1$s, enter pairing code</string>
+    <string name="discover_none">No box found. Make sure the box service is running</string>
+    <string name="scanning">Scanning LAN…</string>
+    <string name="scan_done_none">Scan done: no devices found</string>
+    <string name="scan_found">Found %1$d devices</string>
+    <string name="scan_title">Scan devices</string>
+    <string name="scan_row_tap">%1$s  Tap to add and connect</string>
+    <string name="bt_initializing">Initializing Bluetooth HID…</string>
+    <string name="bt_registered">Bluetooth HID registered</string>
+    <string name="bt_register_failed">Bluetooth registration failed</string>
+    <string name="bt_unavailable">Bluetooth unavailable: %1$s</string>
+    <string name="bt_connected">Bluetooth connected · %1$s</string>
+    <string name="bt_disconnected">Bluetooth disconnected</string>
+    <string name="bt_not_ready">Bluetooth not ready, tap "BT" to retry</string>
+
+    <!-- Toast 提示 -->
+    <string name="pairing_cleared">Pairing cleared, please pair again</string>
+    <string name="keep_one_device">At least one device required</string>
+    <string name="ip_code_required">Both IP and pairing code are required</string>
+    <string name="lan_not_paired">Not paired yet. Tap "Direct" to start</string>
+    <string name="select_mode_first">Choose "Direct" or "BT" first</string>
+    <string name="direct_only">This needs Direct mode: text and apps are sent through the box service</string>
+    <string name="bt_not_supported">This phone does not support Bluetooth remote, use Direct</string>
+    <string name="bt_connecting">Connecting Bluetooth %1$s …</string>
+    <string name="bt_send_failed">Bluetooth send failed: tap "BT" to reconnect the box</string>
+    <string name="bt_discoverable">Let the box find this phone</string>
+    <string name="bt_discoverable_hint">Visible for 120s: choose this phone in the box Bluetooth settings to pair</string>
+
+    <!-- 对话框 -->
+    <string name="cancel">Cancel</string>
+    <string name="delete_current">Delete current</string>
+    <string name="device_picker_title">Choose device</string>
+    <string name="add_title">Add device manually</string>
+    <string name="add_name_hint">Device name (anything)</string>
+    <string name="add_addr_hint">Box IP, e.g. 192.168.3.125</string>
+    <string name="add_positive">Add and connect</string>
+    <string name="lan_title">LAN direct connection</string>
+    <string name="lan_msg">After "TV Remote Service" is installed on the box, a 6-digit pairing code shows on TV.\nPair once and it stays valid. No developer options needed.</string>
+    <string name="lan_ip_hint">Box IP, e.g. 192.168.3.125</string>
+    <string name="lan_code_hint">6-digit pairing code (shown on TV)</string>
+    <string name="lan_pair">Pair and connect</string>
+    <string name="lan_discover">Auto discover</string>
+    <string name="bt_unsupported_title">This phone cannot be a BT remote</string>
+    <string name="bt_unsupported_msg">%1$s\n\nTwo options:\n· Use Direct (TV Remote Service required on the box)\n· Buy a 2.4G air-mouse remote (about 30 RMB, plug and play)</string>
+    <string name="ok_got_it">Got it</string>
+    <string name="bt_none_title">No paired devices yet</string>
+    <string name="bt_none_msg">The box must search for this phone:\n\n1. Tap "Let the box find this phone"\n2. On the box: Settings → Bluetooth, choose this phone\n3. Confirm the code on both sides, then tap "BT"</string>
+    <string name="bt_open_settings">Open Bluetooth settings</string>
+    <string name="bt_pick_title">Choose a paired box</string>
+    <string name="bt_none_found">No paired Bluetooth devices</string>
+    <string name="bt_device">Device</string>
+    <string name="scan_none_msg">Possible causes:\n· "TV Remote Service" is not running on the box\n· Phone and box are not on the same WiFi\n· Router has AP isolation enabled\n\nYou can also tap "Add" to enter the box IP manually.</string>
+
+    <!-- Group card titles (SPEC-012) -->
+    <string name="grp_remote">Remote</string>
+    <string name="grp_input">Input</string>
+    <string name="grp_apps">Apps</string>
+    <string name="volume">Volume</string>
+
+    <!-- 语言切换（SPEC-009） -->
+    <string name="lang_title">Language</string>
+    <string name="lang_system">Follow system</string>
+    <string name="lang_zh">中文</string>
+    <string name="lang_en">English</string>
+
+    <!-- 报错文案：发生了什么 + 怎么办 -->
+    <string name="err_no_host">Connection failed: address not found. Check the phone and box are on the same WiFi and the IP is correct</string>
+    <string name="err_timeout">Connection timed out: the box may be offline. Check the box is powered on</string>
+    <string name="err_refused">Connection refused: box service not running. Open "TV Remote Service" on the TV</string>
+    <string name="err_connect">Connection failed: check the phone and box are on the same WiFi with a working network, then retry</string>
+    <string name="err_conn_lost">Connection lost: box network is unstable. Reconnected automatically, please tap again</string>
+    <string name="err_badcode">Wrong pairing code: check the 6 digits shown on the TV and re-enter</string>
+    <string name="err_auth_lost">Pairing expired: long-press "Direct" to clear pairing, then pair once more</string>
+    <string name="err_a11y">Accessibility service is off on the box: open Settings → Accessibility on the box, enable "TV Remote Service", then retry</string>
+    <string name="err_exec">The box could not perform it: no focused control or input field on the current screen. Open the target screen on the box and retry</string>
+    <string name="err_protocol">Unexpected box response: %1$s</string>
+    <string name="err_generic">Action failed: %1$s</string>
+</resources>
