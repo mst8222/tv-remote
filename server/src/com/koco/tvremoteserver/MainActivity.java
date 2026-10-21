@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
@@ -117,6 +118,17 @@ public class MainActivity extends Activity {
         updateBtn.setClickable(true);
         updateBtn.setFocusable(true);
         updateBtn.setOnClickListener(v -> onUpdateAction());
+        // 实测 H96 Android 12：可聚焦 TextView 不响应 OK/ENTER 的默认点击，
+        // 遥控器按 OK 时由这里显式触发点击（实体遥控与按键注入都走这条路径）
+        updateBtn.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_UP
+                    && (keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                v.performClick();
+                return true;
+            }
+            return false;
+        });
         updateBtn.setOnFocusChangeListener((v, focused) -> {
             updateBtn.setBackground(roundButton(focused));
             updateBtn.setTextColor(focused ? 0xFFFFFFFF : TXT);

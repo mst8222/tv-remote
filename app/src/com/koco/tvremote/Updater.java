@@ -33,8 +33,10 @@ final class Updater {
     /** 公开仓库与资产文件名：手机端下载 TVRemote.apk */
     private static final String REPO = "mst8222/tv-remote";
     private static final String API = "https://api.github.com/repos/" + REPO + "/releases/latest";
+    /** 资产下载走 API 端点：浏览器下载地址所在域名在部分网络会被卡住，API 域名通常可达 */
+    private static final String ASSET_API = "https://api.github.com/repos/" + REPO + "/releases/assets/";
     private static final String APK_NAME = "TVRemote.apk";
-    private static final int TIMEOUT_MS = 10000;
+    private static final int TIMEOUT_MS = 30000;
 
     /** 最新 Release 的必要信息 */
     static final class Release {
@@ -42,6 +44,7 @@ final class Updater {
         String notes = "";
         String url = "";
         long size = 0;
+        long assetId = 0;
     }
 
     private Updater() {
@@ -91,7 +94,7 @@ final class Updater {
     static Release fetchLatest(Context c) throws Exception {
         HttpURLConnection conn = null;
         try {
-            conn = open(API);
+            conn = open(API, "application/vnd.github+json");
             int code = conn.getResponseCode();
             if (code != 200) {
                 throw new Exception(c.getString(R.string.update_err_http, code));
@@ -107,12 +110,15 @@ final class Updater {
                     if (APK_NAME.equals(a.optString("name"))) {
                         r.url = a.optString("browser_download_url", "");
                         r.size = a.optLong("size", 0);
+                        r.assetId = a.optLong("id", 0);
                         break;
                     }
                 }
             }
             if (r.tag.isEmpty()) throw new Exception(c.getString(R.string.update_err_json));
-            if (r.url.isEmpty()) throw new Exception(c.getString(R.string.update_err_asset, APK_NAME));
+            if (r.url.isEmpty() || r.assetId == 0) {
+                throw new Exception(c.getString(R.string.update_err_asset, APK_NAME));
+            }
             return r;
         } catch (IOException e) {
             throw new Exception(c.getString(R.string.update_err_network), e);
@@ -135,7 +141,7 @@ final class Updater {
         }
         HttpURLConnection conn = null;
         try {
-            conn = open(r.url);
+            conn = open(ASSET_API + r.assetId, "application/octet-stream");
             int code = conn.getResponseCode();
             if (code != 200) {
                 throw new Exception(c.getString(R.string.update_err_http, code));
@@ -194,7 +200,9 @@ final class Updater {
                     s.fsync(out);
                 }
                 Intent status = new Intent(a, UpdateInstallReceiver.class);
-                int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+                // 必须 MUTABLE：系统要把 STATUS / EXTRA_INTENT 等 extras 填进来，
+                // IMMUTABLE 会被系统忽略，接收器只会收到空状态（SPEC-017 实测踩坑）
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE;
                 s.commit(PendingIntent.getBroadcast(a, 0, status, flags).getIntentSender());
             }
             return true;
@@ -206,12 +214,12 @@ final class Updater {
         }
     }
 
-    private static HttpURLConnection open(String url) throws IOException {
+    private static HttpURLConnection open(String url, String accept) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setConnectTimeout(TIMEOUT_MS);
         conn.setReadTimeout(TIMEOUT_MS);
         conn.setInstanceFollowRedirects(true);
-        conn.setRequestProperty("Accept", "application/vnd.github+json");
+        conn.setRequestProperty("Accept", accept);
         conn.setRequestProperty("User-Agent", "TVRemote-OTA");
         return conn;
     }

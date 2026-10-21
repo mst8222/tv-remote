@@ -66,7 +66,7 @@ def link_resources(extra):
          "--manifest", os.path.join(APP, "AndroidManifest.xml"),
          "--java", gendir,
          "--min-sdk-version", "26", "--target-sdk-version", "30",
-         "--version-code", "4", "--version-name", "1.4.0"] + extra)
+         "--version-code", "5", "--version-name", "1.4.1"] + extra)
     print("[2/7] 资源与清单已链接")
     return base
 

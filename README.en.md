@@ -284,12 +284,20 @@ tv-remote/
 - `LIST` relies on the `<queries>` declaration in the box app manifest (Android 11+ package visibility).
 - In-app updates need access to `api.github.com`; the anonymous API limit is 60 requests per hour,
   and the app reports a retry-later error when exceeded.
+- The APK is downloaded through the GitHub API asset endpoint (the browser download host is blocked
+  on some networks); networks that cannot reach GitHub at all still need a proxy.
 - Updates always go through the system install confirmation (no silent install). Some Android
   versions additionally require allowing this app to install unknown apps; on the box the
   installer dialog must be confirmed with the physical remote.
+- The box "Check for updates" button handles both remote OK/ENTER and touch, because some firmware
+  does not fire the default click for a focusable TextView.
 
 ## Versions
 
+- v1.4.1: fixed the update callback that never opened the system install dialog (the PendingIntent
+  must be MUTABLE); downloads now use the GitHub API asset endpoint with a 30-second timeout; the
+  box update button also handles OK/ENTER. The v1.4.0 OTA build has these defects, so install
+  v1.4.1 manually once before in-app updates can work.
 - v1.4.0: in-app update check on both apps; reads the latest GitHub Release, downloads the
   matching APK and lets the system installer complete the upgrade. The box service restarts
   automatically after the update.
