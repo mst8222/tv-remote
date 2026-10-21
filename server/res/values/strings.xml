@@ -16,6 +16,26 @@
     <string name="ui_tip">第一次使用请在系统「设置 → 无障碍」里开启「TV遥控服务」，不需要 root。\n然后在手机 App 里选择「直连」或「蓝牙」，输入上面 6 位配对码即可。\n之后每次开机（包括断电重启）服务都会自动启动。</string>
     <string name="a11y_desc">接收手机发来的遥控指令，执行返回、主页、方向键、音量与文字输入等操作。</string>
 
+    <!-- 版本更新（SPEC-017） -->
+    <string name="ui_grp_update">版本更新</string>
+    <string name="ui_update_current">当前版本 v%1$s</string>
+    <string name="ui_update_check">检查更新</string>
+    <string name="ui_update_checking">正在检查更新…</string>
+    <string name="ui_update_latest">已是最新版本 v%1$s</string>
+    <string name="ui_update_found">发现新版本 v%1$s（当前 v%2$s）</string>
+    <string name="ui_update_download">下载并安装</string>
+    <string name="ui_update_downloading">正在下载更新…</string>
+    <string name="ui_update_ready">下载完成，请在系统安装界面确认</string>
+    <string name="ui_update_failed">检查更新失败：%1$s</string>
+    <string name="update_perm_required">需要先允许本应用安装应用：请在系统设置中打开「安装未知应用」</string>
+    <string name="update_install_failed">安装失败：%1$s</string>
+    <string name="update_installed">更新完成</string>
+    <string name="update_err_network">网络请求失败，请检查网络后重试</string>
+    <string name="update_err_http">GitHub 请求失败：HTTP %1$d</string>
+    <string name="update_err_asset">最新版本中没有 %1$s</string>
+    <string name="update_err_size">下载的安装包不完整，请重试</string>
+    <string name="update_err_json">更新信息解析失败</string>
+
     <!-- 前台通知 -->
     <string name="ntf_channel">遥控服务</string>
     <string name="ntf_title">TV 遥控服务</string>

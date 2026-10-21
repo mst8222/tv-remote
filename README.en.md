@@ -171,6 +171,7 @@ pairing and connection mode.
 | Volume / Mute | Adjusts box media volume |
 | Text input | Writes into the focused editable field; fails if the current screen has none |
 | App shortcuts | Dynamically lists every launchable third-party app on the box (name + first-letter icon) |
+| Check for updates | Phone: "About" card; box: "Version update" card. Reads the latest GitHub Release, downloads the APK, and the system installer confirms |
 
 ### App shortcut rules
 
@@ -281,9 +282,17 @@ tv-remote/
 - App shortcuts cover third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry; pure service apps
   and apps without a launcher entry are not listed.
 - `LIST` relies on the `<queries>` declaration in the box app manifest (Android 11+ package visibility).
+- In-app updates need access to `api.github.com`; the anonymous API limit is 60 requests per hour,
+  and the app reports a retry-later error when exceeded.
+- Updates always go through the system install confirmation (no silent install). Some Android
+  versions additionally require allowing this app to install unknown apps; on the box the
+  installer dialog must be confirmed with the physical remote.
 
 ## Versions
 
+- v1.4.0: in-app update check on both apps; reads the latest GitHub Release, downloads the
+  matching APK and lets the system installer complete the upgrade. The box service restarts
+  automatically after the update.
 - v1.3.0: dynamic app shortcuts; `LIST` also returns app labels (`package|base64(label)`) and the
   phone renders every launchable third-party app on the box; the box app declares `<queries>` for
   Android 11+ package visibility.

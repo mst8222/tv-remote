@@ -31,6 +31,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.text.Collator;
 import java.util.ArrayList;
@@ -230,6 +231,8 @@ public class MainActivity extends Activity {
         column.setOrientation(LinearLayout.VERTICAL);
         column.addView(card(R.string.grp_remote, buildRemote()), lp(-1, -2, 0, 0, 0, dp(10)));
         column.addView(card(R.string.grp_input, buildInput()), lp(-1, -2, 0, 0, 0, dp(10)));
+        // SPEC-017：关于卡放在应用卡之前，应用卡仍恒在列尾（rebuildApps 会重挂）
+        column.addView(card(R.string.grp_about, buildAbout()), lp(-1, -2, 0, 0, 0, dp(10)));
         // 应用卡按缓存载荷先渲染，随后 ensureApps 异步刷新（SPEC-016 FR-16-6）
         rebuildApps(parseApps(sp.getString("apps_" + curHost(), "")));
 
@@ -772,6 +775,88 @@ public class MainActivity extends Activity {
         g.setCornerRadius(dp(radiusDp));
         if (stroke != 0) g.setStroke(1, stroke);
         return g;
+    }
+
+    // ---------------- 关于与 OTA 更新（SPEC-017） ----------------
+
+    /** 关于卡：当前版本 + 检查更新入口 */
+    private View buildAbout() {
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(LinearLayout.HORIZONTAL);
+        l.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView ver = new TextView(this);
+        ver.setText(getString(R.string.update_current, Updater.currentVersion(this)));
+        ver.setTextColor(SUB);
+        ver.setTextSize(13);
+        l.addView(ver, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView btn = new TextView(this);
+        btn.setText(R.string.update_check);
+        btn.setTextColor(TXT);
+        btn.setTextSize(13);
+        btn.setGravity(Gravity.CENTER);
+        btn.setBackground(ripple(SURFACE2, 999, 0));
+        btn.setPadding(dp(14), dp(7), dp(14), dp(7));
+        btn.setOnClickListener(v -> checkUpdate());
+        l.addView(btn);
+        return l;
+    }
+
+    /** 读取 GitHub 最新 Release，发现新版本时弹更新说明 */
+    private void checkUpdate() {
+        Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show();
+        worker.submit(() -> {
+            try {
+                final Updater.Release r = Updater.fetchLatest(this);
+                final String cur = Updater.currentVersion(this);
+                final boolean newer = Updater.isNewer(r.tag, cur);
+                runOnUiThread(() -> {
+                    if (newer) {
+                        showUpdateSheet(r, cur);
+                    } else {
+                        Toast.makeText(this, getString(R.string.update_latest,
+                                Updater.displayVersion(cur)), Toast.LENGTH_SHORT).show();
+                    }
+                });
+            } catch (Exception e) {
+                final String msg = e.getMessage() == null ? "" : e.getMessage();
+                runOnUiThread(() -> Toast.makeText(this,
+                        getString(R.string.update_failed, msg), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    private void showUpdateSheet(final Updater.Release r, String curVersion) {
+        Sheet sheet = new Sheet(
+                getString(R.string.update_found_title, Updater.displayVersion(r.tag)),
+                getString(R.string.update_current, curVersion));
+        String notes = r.notes == null ? "" : r.notes.trim();
+        if (!notes.isEmpty()) {
+            sheet.text(notes.length() > 600 ? notes.substring(0, 600) + "…" : notes);
+        }
+        sheet.action(getString(R.string.update_later), false, SUB)
+                .action(getString(R.string.update_download), true, Color.WHITE,
+                        () -> downloadUpdate(r))
+                .show();
+    }
+
+    /** 后台下载 APK，完成后拉起系统安装确认 */
+    private void downloadUpdate(final Updater.Release r) {
+        Toast.makeText(this, R.string.update_downloading, Toast.LENGTH_SHORT).show();
+        worker.submit(() -> {
+            try {
+                final File apk = Updater.download(this, r);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, R.string.update_install_hint, Toast.LENGTH_SHORT).show();
+                    Updater.install(this, apk);
+                });
+            } catch (Exception e) {
+                final String msg = e.getMessage() == null ? "" : e.getMessage();
+                runOnUiThread(() -> Toast.makeText(this,
+                        getString(R.string.update_failed, msg), Toast.LENGTH_LONG).show());
+            }
+        });
     }
 
     // ---------------- 自绘弹窗（SPEC-012 FR-12-7：不使用原生 AlertDialog 外观） ----------------

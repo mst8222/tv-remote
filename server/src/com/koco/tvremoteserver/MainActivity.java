@@ -14,6 +14,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -31,8 +32,10 @@ public class MainActivity extends Activity {
             TXT = 0xFFEAEFF7, SUB = 0xFF8A94A6, DIMTXT = 0xFF5A6472,
             GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A;
 
-    private TextView statusView, ipView, codeView, a11yView;
+    private TextView statusView, ipView, codeView, a11yView, updateView, updateBtn;
     private GradientDrawable dotBg;
+    /** 检查到的待安装 Release；为空表示当前没有可下载的新版本 */
+    private Updater.Release pendingUpdate;
     private final Handler h = new Handler(Looper.getMainLooper());
 
     @Override
@@ -94,6 +97,34 @@ public class MainActivity extends Activity {
         addrCard.addView(ipView, lpRow(0));
         addCard(root, addrCard, dp(20));
 
+        // 版本更新卡（SPEC-017）：状态文字 + 检查更新/下载安装按钮，均可遥控聚焦
+        LinearLayout updateCard = card(R.string.ui_grp_update);
+        updateView = new TextView(this);
+        updateView.setTextSize(14);
+        updateView.setTextColor(TXT);
+        updateView.setLineSpacing(dp(4), 1f);
+        updateView.setPadding(0, dp(6), 0, dp(12));
+        updateView.setText(getString(R.string.ui_update_current, Updater.currentVersion(this)));
+        updateCard.addView(updateView, lpRow(0));
+
+        updateBtn = new TextView(this);
+        updateBtn.setText(R.string.ui_update_check);
+        updateBtn.setTextSize(15);
+        updateBtn.setTextColor(TXT);
+        updateBtn.setGravity(Gravity.CENTER);
+        updateBtn.setPadding(dp(22), dp(10), dp(22), dp(10));
+        updateBtn.setBackground(roundButton(false));
+        updateBtn.setClickable(true);
+        updateBtn.setFocusable(true);
+        updateBtn.setOnClickListener(v -> onUpdateAction());
+        updateBtn.setOnFocusChangeListener((v, focused) -> {
+            updateBtn.setBackground(roundButton(focused));
+            updateBtn.setTextColor(focused ? 0xFFFFFFFF : TXT);
+        });
+        updateCard.addView(updateBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addCard(root, updateCard, dp(16));
+
         TextView tip = new TextView(this);
         tip.setText(getString(R.string.ui_tip));
         tip.setTextSize(13);
@@ -125,6 +156,14 @@ public class MainActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setColor(SURFACE);
         g.setCornerRadius(dp(24));
+        return g;
+    }
+
+    /** 更新按钮底色：聚焦时用强调蓝，便于遥控导航时看清落点 */
+    private GradientDrawable roundButton(boolean focused) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(focused ? ACCENT : 0xFF1C2430);
+        g.setCornerRadius(dp(999));
         return g;
     }
 
@@ -162,6 +201,80 @@ public class MainActivity extends Activity {
         statusView.setTextColor(GREEN);
         srow.addView(statusView);
         return srow;
+    }
+
+    // ---------------- OTA 更新（SPEC-017） ----------------
+
+    /** 按钮语义：有待安装版本则下载安装，否则重新检查 */
+    private void onUpdateAction() {
+        if (pendingUpdate != null) {
+            downloadUpdate(pendingUpdate);
+        } else {
+            checkUpdate();
+        }
+    }
+
+    private void checkUpdate() {
+        pendingUpdate = null;
+        updateView.setText(R.string.ui_update_checking);
+        updateBtn.setText(R.string.ui_update_check);
+        setUpdateEnabled(false);
+        new Thread(() -> {
+            try {
+                final Updater.Release r = Updater.fetchLatest(this);
+                final String cur = Updater.currentVersion(this);
+                final boolean newer = Updater.isNewer(r.tag, cur);
+                runOnUiThread(() -> {
+                    pendingUpdate = newer ? r : null;
+                    if (newer) {
+                        updateView.setText(getString(R.string.ui_update_found,
+                                Updater.displayVersion(r.tag), cur));
+                        updateBtn.setText(R.string.ui_update_download);
+                    } else {
+                        updateView.setText(getString(R.string.ui_update_latest, cur));
+                        updateBtn.setText(R.string.ui_update_check);
+                    }
+                    setUpdateEnabled(true);
+                });
+            } catch (Exception e) {
+                final String msg = e.getMessage() == null ? "" : e.getMessage();
+                runOnUiThread(() -> {
+                    updateView.setText(getString(R.string.ui_update_failed, msg));
+                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateEnabled(true);
+                });
+            }
+        }).start();
+    }
+
+    private void downloadUpdate(final Updater.Release r) {
+        updateView.setText(R.string.ui_update_downloading);
+        setUpdateEnabled(false);
+        new Thread(() -> {
+            try {
+                final File apk = Updater.download(this, r);
+                runOnUiThread(() -> {
+                    pendingUpdate = null;
+                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateEnabled(true);
+                    boolean submitted = Updater.install(this, apk);
+                    updateView.setText(submitted
+                            ? R.string.ui_update_ready : R.string.update_perm_required);
+                });
+            } catch (Exception e) {
+                final String msg = e.getMessage() == null ? "" : e.getMessage();
+                runOnUiThread(() -> {
+                    updateView.setText(getString(R.string.ui_update_failed, msg));
+                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateEnabled(true);
+                });
+            }
+        }).start();
+    }
+
+    private void setUpdateEnabled(boolean on) {
+        updateBtn.setEnabled(on);
+        updateBtn.setAlpha(on ? 1f : 0.45f);
     }
 
     private void tick() {

@@ -16,6 +16,26 @@
     <string name="ui_tip">First run: enable "TV Remote Service" in system Settings → Accessibility. No root required.\nThen choose "Direct" or "BT" in the phone app and enter the 6-digit pairing code above.\nThe service starts automatically on every boot (including after power loss).</string>
     <string name="a11y_desc">Receives remote commands from the phone and performs back, home, D-pad, volume and text input actions.</string>
 
+    <!-- Version update (SPEC-017) -->
+    <string name="ui_grp_update">Version update</string>
+    <string name="ui_update_current">Current version v%1$s</string>
+    <string name="ui_update_check">Check for updates</string>
+    <string name="ui_update_checking">Checking for updates…</string>
+    <string name="ui_update_latest">Already up to date: v%1$s</string>
+    <string name="ui_update_found">New version v%1$s (current v%2$s)</string>
+    <string name="ui_update_download">Download and install</string>
+    <string name="ui_update_downloading">Downloading update…</string>
+    <string name="ui_update_ready">Download complete. Confirm the installation in the system dialog</string>
+    <string name="ui_update_failed">Update check failed: %1$s</string>
+    <string name="update_perm_required">Allow this app to install apps first: enable "Install unknown apps" in system settings</string>
+    <string name="update_install_failed">Installation failed: %1$s</string>
+    <string name="update_installed">Update installed</string>
+    <string name="update_err_network">Network request failed. Check the network and retry</string>
+    <string name="update_err_http">GitHub request failed: HTTP %1$d</string>
+    <string name="update_err_asset">%1$s is missing from the latest release</string>
+    <string name="update_err_size">The downloaded package is incomplete. Please retry</string>
+    <string name="update_err_json">Could not parse the update information</string>
+
     <!-- 前台通知 -->
     <string name="ntf_channel">Remote service</string>
     <string name="ntf_title">TV Remote Service</string>

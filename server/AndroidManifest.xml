@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.koco.tvremoteserver"
-    android:versionCode="3"
-    android:versionName="1.3.0">
+    android:versionCode="4"
+    android:versionName="1.4.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- SPEC-017：应用内升级需要发起安装会话 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- SPEC-016：Android 11+ 包可见性。只声明可启动的应用类型，
          使 LIST 能取到盒子上的第三方应用（含 TV 的 leanback 入口） -->
@@ -69,7 +71,14 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <!-- SPEC-017：应用被自身更新替换后自动恢复服务 -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- SPEC-017：PackageInstaller 安装状态回调 -->
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false" />
     </application>
 </manifest>
