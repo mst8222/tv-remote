@@ -296,13 +296,19 @@ tv-remote/
 
 ## Versions
 
-- v1.3: dynamic app shortcuts; `LIST` also returns app labels (`package|base64(label)`) and the
+- v1.3.0: dynamic app shortcuts; `LIST` also returns app labels (`package|base64(label)`) and the
   phone renders every launchable third-party app on the box; the box app declares `<queries>` for
   Android 11+ package visibility.
 - v1.2: root-free box control through the accessibility service; connection mode and Bluetooth
   target remembered per device; Bluetooth Back/Home switched to consumer control
   (`AC Back` / `AC Home`).
 - v1.1: removed phone-side ADB control; kept "Direct + Bluetooth".
+
+## License
+
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Personal study, research,
+testing, and other noncommercial use are permitted; **commercial use is prohibited**.
+Redistributions and modified works must retain this license and copyright notice.
 
 Requirements and acceptance records: [spec/](spec/README.md). Test conventions: [tests/](tests/README.md).
 Development rules for all sessions: [AGENTS.md](AGENTS.md).
