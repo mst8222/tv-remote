@@ -35,6 +35,7 @@ import java.util.concurrent.Executors;
  * 协议（每行一条，\n 结尾）：
  *   PAIR <6位配对码>          -> OK <token>
  *   KEY <token> <keycode>     -> OK | ERR a11y | ERR cmd | ERR exec
+ *   KEYLONG <token> <keycode> -> OK | ERR a11y | ERR cmd | ERR exec（SPEC-018，仅 23）
  *   TEXT <token> <base64>     -> OK | ERR a11y | ERR exec
  *   APP <token> <包名>         -> OK | ERR exec
  *   LIST <token>              -> OK <包名|base64(应用名),逗号分隔>
@@ -168,6 +169,22 @@ public class ServerService extends Service {
                         return "ERR arg";
                     }
                     switch (TvRemoteAccessibilityService.key(this, code)) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        case TvRemoteAccessibilityService.RES_UNSUPPORTED: return "ERR cmd";
+                        default: return "ERR exec";
+                    }
+                }
+                case "KEYLONG": {
+                    // SPEC-018：长按 OK，盒端执行 ACTION_LONG_CLICK
+                    if (p.length < 3) return "ERR arg";
+                    int code;
+                    try {
+                        code = Integer.parseInt(p[2].trim());
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    switch (TvRemoteAccessibilityService.keyLong(this, code)) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
                         case TvRemoteAccessibilityService.RES_UNSUPPORTED: return "ERR cmd";

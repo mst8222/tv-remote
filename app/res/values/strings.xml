@@ -20,6 +20,11 @@
     <string name="key_vol_up">音量+</string>
     <string name="key_vol_down">音量−</string>
     <string name="key_mute">静音</string>
+    <!-- 飞鼠（SPEC-018） -->
+    <string name="air_on">飞鼠已开启：转动手机移动光标，OK 为左键</string>
+    <string name="air_off">飞鼠已关闭</string>
+    <string name="air_need_bt">飞鼠需要蓝牙模式：直连无法移动盒子光标</string>
+    <string name="air_no_sensor">这台手机没有陀螺仪，无法使用飞鼠</string>
 
     <!-- 应用快捷 -->
     <string name="app_settings">设置</string>

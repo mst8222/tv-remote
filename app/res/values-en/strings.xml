@@ -20,6 +20,11 @@
     <string name="key_vol_up">Vol+</string>
     <string name="key_vol_down">Vol−</string>
     <string name="key_mute">Mute</string>
+    <!-- Air mouse (SPEC-018) -->
+    <string name="air_on">Air mouse on: tilt the phone to move the cursor, OK is left click</string>
+    <string name="air_off">Air mouse off</string>
+    <string name="air_need_bt">Air mouse needs BT mode: Direct cannot move the box cursor</string>
+    <string name="air_no_sensor">This phone has no gyroscope, air mouse is unavailable</string>
 
     <!-- 应用快捷（应用名不翻译） -->
     <string name="app_settings">Settings</string>

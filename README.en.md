@@ -165,6 +165,8 @@ pairing and connection mode.
 | BT | Register HID and connect the paired box; switching devices reconnects that device's target |
 | 中/EN | Chinese / English / follow system, applied immediately and persisted |
 | D-pad / OK | Uses system DPAD global actions; falls back to focus traversal on firmware that returns false |
+| OK short / long press | In BT mode the box keeps receiving "key down" while held, so TV apps judge long-press themselves; in direct mode a hold of 500 ms or more sends a long-press command on release |
+| Air mouse (↖, top-right) | BT mode only: tilt the phone to move the box cursor, OK acts as left click; tap again to disable |
 | Back / Home | System global Back / Home |
 | Menu | Opens recent tasks (no global Menu action without root) |
 | Power | Locks the box screen (not a real power off) |
@@ -198,6 +200,7 @@ with Settings (`com.android.settings`) pinned first (system app, always shown).
 | Scan finds nothing | Same Wi-Fi, box service running, AP isolation off; or add the IP manually |
 | D-pad does nothing | The screen has no focusable element (e.g. full-screen player); some firmware only supports focus traversal |
 | Bluetooth keys do nothing | Keep the app in the foreground, tap "BT" again, confirm "Bluetooth connected" |
+| Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
 | Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
 
 ## Build
@@ -230,6 +233,7 @@ Box TCP 8899, one command per line terminated by `\n`.
 | `PING` | `PONG` | Liveness check, no auth |
 | `PAIR <6-digit code>` | `OK <token>` / `ERR badcode` | Exchange the pair code for a long-lived token |
 | `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Inject a key |
+| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only) via `ACTION_LONG_CLICK` on the focused node |
 | `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
 | `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
 | `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
@@ -246,7 +250,7 @@ tv-remote/
 │   └── src/com/koco/tvremote/
 │       ├── MainActivity.java   # UI and interaction, built in code (no layout XML)
 │       ├── LanClient.java      # Direct client (TCP + UDP discovery)
-│       ├── BtHid.java          # Bluetooth HID keyboard / consumer control
+│       ├── BtHid.java          # Bluetooth HID keyboard / consumer control / mouse (air mouse)
 │       └── Errors.java         # Localized error mapping
 ├── server/                 # Box app, com.koco.tvremoteserver
 │   ├── AndroidManifest.xml
@@ -279,6 +283,15 @@ tv-remote/
 - Some TV firmware does not support global DPAD actions (H96 / Android 12 in our tests); the app
   falls back to focus traversal, so direction keys do nothing on screens without focusable controls.
 - Bluetooth HID does not support text input or app shortcuts and needs the app in the foreground.
+- OK long-press is judged by the box app in BT mode; in direct mode it depends on the focused
+  node supporting `ACTION_LONG_CLICK`, so apps without long-click support show no effect.
+- Air mouse works only in BT HID mode: direct mode cannot move the system cursor, and the box
+  must accept Bluetooth mouse HID reports. Phones without a gyroscope cannot enable it;
+  sensitivity is a fixed constant (portrait and landscape both work).
+- The box persists the HID report descriptor from its **first** pairing (on H96 it lives in
+  `HidDescriptor` inside `/data/misc/bluedroid/bt_config.conf`; Fold3 re-reads it on reconnect).
+  After upgrading, boxes paired with an older version must remove the pairing and pair again,
+  otherwise they still build a keyboard-only input device and air mouse does nothing.
 - App shortcuts cover third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry; pure service apps
   and apps without a launcher entry are not listed.
 - `LIST` relies on the `<queries>` declaration in the box app manifest (Android 11+ package visibility).
@@ -294,6 +307,11 @@ tv-remote/
 
 ## Versions
 
+- v1.5.0: OK now distinguishes short and long press (BT sends key down/up; direct mode adds a
+  `KEYLONG` command); a new air-mouse key at the top-right of the remote card uses the phone
+  gyroscope to move the box cursor in BT HID mode, with OK as left click.
+  Upgrade note: boxes paired with an older version must be unpaired and paired again before
+  air mouse works.
 - v1.4.1: fixed the update callback that never opened the system install dialog (the PendingIntent
   must be MUTABLE); downloads now use the GitHub API asset endpoint with a 30-second timeout; the
   box update button also handles OK/ENTER. The v1.4.0 OTA build has these defects, so install

@@ -84,6 +84,26 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
         }
     }
 
+    /**
+     * SPEC-018：长按。只支持 OK（23），对当前焦点节点执行 ACTION_LONG_CLICK。
+     * 节点不可长按时视为无操作（RES_OK），与方向键到边界的行为一致。
+     */
+    public static int keyLong(Context c, int code) {
+        if (code != 23) return RES_UNSUPPORTED;
+        TvRemoteAccessibilityService s = instance;
+        if (s == null) return RES_NO_A11Y;
+        return s.longClickFocused();
+    }
+
+    private int longClickFocused() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return RES_FAIL;
+        AccessibilityNodeInfo node = findCurrentFocus(root);
+        while (node != null && !node.isLongClickable()) node = node.getParent();
+        if (node == null) return RES_OK; // 当前焦点不支持长按，视为无操作
+        return node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) ? RES_OK : RES_FAIL;
+    }
+
     private static int global(int action) {
         TvRemoteAccessibilityService s = instance;
         if (s == null) return RES_NO_A11Y;

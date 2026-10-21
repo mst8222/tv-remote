@@ -14,12 +14,19 @@ import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -66,6 +73,24 @@ public class MainActivity extends Activity {
     private GradientDrawable dotBg;
     private LanClient lan;
     private boolean lanMode = false;
+    // SPEC-018：飞鼠（仅蓝牙 HID），陀螺仪角速度换算为鼠标相对位移
+    private boolean airMouse = false;
+    private SensorManager sensorManager;
+    private Sensor gyro;
+    private TextView mouseBtn;
+    /** 飞鼠圆键直径（标题行右侧，SPEC-018） */
+    private int mouseD;
+    /** 飞鼠键右缩进：使右边缘与系统键行第 4 列（电源键）右边缘对齐 */
+    private int mouseInset;
+    private long okDownAt = 0;
+    /** 与 Android 系统长按阈值一致 */
+    private static final long LONG_PRESS_MS = 500;
+    /** 陀螺仪死区（rad/s），抑制手抖 */
+    private static final float GYRO_DEAD_ZONE = 0.05f;
+    /** 每 20ms 角速度 -> 位移像素的换算系数（1 rad/s 约 600 px/s） */
+    private static final float GYRO_SCALE = 12f;
+    /** 飞鼠调试日志节流时间 */
+    private long lastGyroLog = 0;
     // SPEC-012：应用卡动态挂载/重建用
     private LinearLayout column;
     private View appsCard;
@@ -229,7 +254,7 @@ public class MainActivity extends Activity {
 
         column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
-        column.addView(card(R.string.grp_remote, buildRemote()), lp(-1, -2, 0, 0, 0, dp(10)));
+        column.addView(card(R.string.grp_remote, buildAirKey(), buildRemote()), lp(-1, -2, 0, 0, 0, dp(10)));
         column.addView(card(R.string.grp_input, buildInput()), lp(-1, -2, 0, 0, 0, dp(10)));
         // SPEC-017：关于卡放在应用卡之前，应用卡仍恒在列尾（rebuildApps 会重挂）
         column.addView(card(R.string.grp_about, buildAbout()), lp(-1, -2, 0, 0, 0, dp(10)));
@@ -258,15 +283,29 @@ public class MainActivity extends Activity {
 
     /** SPEC-012 分组卡片：SURFACE 底 20dp 圆角，左上 11sp SUB 分组标题 + 内容 */
     private View card(int titleRes, View content) {
+        return card(titleRes, null, content);
+    }
+
+    /** 带标题行右侧附加按键的卡片（SPEC-018：遥控器卡右上角飞鼠键） */
+    private View card(int titleRes, View titleExtra, View content) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setBackground(round(SURFACE, 20, 0));
         c.setPadding(dp(14), dp(12), dp(14), dp(14));
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
         TextView t = new TextView(this);
         t.setText(getString(titleRes));
         t.setTextColor(SUB);
         t.setTextSize(11);
-        c.addView(t, lp(-2, -2, 0, 0, 0, dp(10)));
+        head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        if (titleExtra != null) {
+            LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(dp(mouseD), dp(mouseD));
+            elp.rightMargin = mouseInset;
+            head.addView(titleExtra, elp);
+        }
+        c.addView(head, lp(-1, -2, 0, 0, 0, dp(titleExtra == null ? 10 : 6)));
         c.addView(content, lp(-1, -2, 0, 0, 0, 0));
         return c;
     }
@@ -428,7 +467,24 @@ public class MainActivity extends Activity {
         ok.setTextSize(okText);
         ok.setGravity(Gravity.CENTER);
         ok.setBackground(okRing());
-        ok.setOnClickListener(v -> press(23));
+        // SPEC-018：OK 区分短按/长按。蓝牙发按下/抬起（盒子自行判定长按），
+        // 直连抬手时按按住时长选 KEY 或 KEYLONG；飞鼠模式下 OK 为鼠标左键。
+        ok.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    okDownAt = SystemClock.uptimeMillis();
+                    okDown();
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    okUp(SystemClock.uptimeMillis() - okDownAt);
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    okCancel();
+                    return true;
+                default:
+                    return false;
+            }
+        });
         pad.addView(ok, new FrameLayout.LayoutParams(dp(okD), dp(okD), Gravity.CENTER));
         return pad;
     }
@@ -500,6 +556,103 @@ public class MainActivity extends Activity {
         r.addView(cell(circleKey(getString(R.string.key_mute), 164, 11, TXT)), gridCol());
         return r;
     }
+
+    // ---------------- 飞鼠开关（SPEC-018） ----------------
+
+    /** 遥控器卡右上角的飞鼠圆键：与电源键同直径，右边缘对齐电源键（参考实体遥控器） */
+    private View buildAirKey() {
+        // 电源键是系统键行四列中的第 4 列，圆键在列内居中，
+        // 因此右边缘到卡片内容右界的距离 = (列宽 - 圆键直径) / 2
+        mouseD = sysLen;
+        mouseInset = Math.max(0, (contentWidth() / 4 - dp(mouseD)) / 2);
+        TextView b = new TextView(this);
+        b.setText("↖");
+        b.setTextColor(TXT);
+        b.setTextSize(sysIcon + 2);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(ripple(SURFACE2, mouseD / 2f, 0));
+        b.setOnClickListener(v -> toggleAirMouse());
+        mouseBtn = b;
+        return b;
+    }
+
+    private void toggleAirMouse() {
+        Log.i("BtHid", "toggleAirMouse airMouse=" + airMouse + " btMode=" + btMode
+                + " ready=" + (bt != null && bt.isReady()) + " dev=" + (bt == null ? null : bt.connectedDevice()));
+        if (airMouse) {
+            stopAirMouse();
+            setStatus(getString(R.string.air_off), true);
+            return;
+        }
+        // 直连没有移动系统光标的能力，飞鼠只在蓝牙 HID 模式可用
+        if (!btMode) {
+            setStatus(getString(R.string.air_need_bt), false);
+            return;
+        }
+        // 已注册 HID 但未连上盒子时，sendReport 没有目标，飞鼠会静默不动
+        if (bt == null || !bt.isReady() || bt.connectedDevice() == null) {
+            setStatus(getString(R.string.bt_not_ready), false);
+            return;
+        }
+        if (sensorManager == null) {
+            sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+            gyro = sensorManager == null ? null : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+        }
+        if (gyro == null) {
+            setStatus(getString(R.string.air_no_sensor), false);
+            return;
+        }
+        if (!sensorManager.registerListener(gyroListener, gyro, SensorManager.SENSOR_DELAY_GAME)) {
+            setStatus(getString(R.string.air_no_sensor), false);
+            return;
+        }
+        airMouse = true;
+        updateMouseBtn();
+        setStatus(getString(R.string.air_on), true);
+    }
+
+    private void stopAirMouse() {
+        airMouse = false;
+        if (sensorManager != null) sensorManager.unregisterListener(gyroListener);
+        if (bt != null) bt.releaseAll(); // 补发释放，避免左键卡在按下状态
+        updateMouseBtn();
+    }
+
+    private void updateMouseBtn() {
+        if (mouseBtn == null) return;
+        mouseBtn.setBackground(airMouse ? rippleGrad(999) : ripple(SURFACE2, mouseD / 2f, 0));
+        mouseBtn.setTextColor(airMouse ? Color.WHITE : TXT);
+    }
+
+    /**
+     * 陀螺仪 -> 鼠标位移：手握着手机左右摆动主要是绕屏幕竖直轴（Y）转动，
+     * 上下点头是绕水平轴（X）转动；Z（绕屏幕法线）只在平放打转时才有值，
+     * 不能用作水平位移（实测用 Z 时正常握持转动光标不动）。
+     */
+    private final SensorEventListener gyroListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent e) {
+            if (!airMouse || bt == null) return;
+            float gy = e.values[1];
+            float gx = e.values[0];
+            if (Math.abs(gy) < GYRO_DEAD_ZONE) gy = 0;
+            if (Math.abs(gx) < GYRO_DEAD_ZONE) gx = 0;
+            int dx = Math.round(-gy * GYRO_SCALE);
+            int dy = Math.round(gx * GYRO_SCALE);
+            if (dx != 0 || dy != 0) {
+                boolean ok = bt.sendMouseMove(dx, dy);
+                long t = SystemClock.uptimeMillis();
+                if (t - lastGyroLog > 500) {
+                    lastGyroLog = t;
+                    Log.i("BtHid", "gyro x=" + gx + " y=" + gy + " dx=" + dx + " dy=" + dy + " ok=" + ok);
+                }
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        }
+    };
 
     /** 卡片内容区宽度（像素）：页面可用宽 - 卡片左右内边距 14dp×2（card() 的 padding） */
     private int contentWidth() {
@@ -1045,6 +1198,7 @@ public class MainActivity extends Activity {
     /** 当前设备已配对：直接启用直连模式，控制目标 = 当前设备 */
     private void enableLan() {
         if (btMode && bt != null) bt.disconnect();
+        stopAirMouse(); // SPEC-018：飞鼠只在蓝牙模式可用
         lan = new LanClient(curHost(), LanClient.DEFAULT_PORT, tokenOf(curHost()));
         lanMode = true;
         btMode = false;
@@ -1057,6 +1211,7 @@ public class MainActivity extends Activity {
     /** SPEC-015：切换/启动设备时，按该设备上次成功使用的方式恢复连接 */
     private void applyDeviceMode() {
         String mode = modeOf(curHost());
+        stopAirMouse(); // SPEC-018：切设备时退出飞鼠，避免对着旧盒子移动光标
         if (btMode && bt != null) bt.disconnect();
         lan = null;
         lanMode = false;
@@ -1096,6 +1251,49 @@ public class MainActivity extends Activity {
             return;
         }
         setStatus(getString(R.string.select_mode_first), false);
+    }
+
+    // ---------------- OK 键按下/抬起（SPEC-018） ----------------
+
+    private void okDown() {
+        if (airMouse) {
+            if (bt != null) bt.sendMouseButton(BtHid.MOUSE_LEFT);
+            return;
+        }
+        if (btMode) {
+            // 蓝牙：按下即发送并保持，抬起才释放，盒子端可按按住时长判定长按
+            if (bt == null || !bt.isReady()) {
+                setStatus(getString(R.string.bt_not_ready), false);
+                return;
+            }
+            btSend(bt.sendKeyDown(BtHid.K_ENTER));
+        }
+        // 直连：协议只有一次性命令，抬手时再按按住时长选 KEY 或 KEYLONG
+    }
+
+    private void okUp(long heldMs) {
+        if (airMouse) {
+            if (bt != null) bt.sendMouseButton(0);
+            return;
+        }
+        if (btMode) {
+            if (bt != null) bt.sendKeyUp();
+            return;
+        }
+        if (lanMode) {
+            if (heldMs >= LONG_PRESS_MS) lanPressLong(23);
+            else lanPress(23);
+            return;
+        }
+        setStatus(getString(R.string.select_mode_first), false);
+    }
+
+    private void okCancel() {
+        if (airMouse) {
+            if (bt != null) bt.sendMouseButton(0);
+            return;
+        }
+        if (btMode && bt != null) bt.sendKeyUp();
     }
 
     /** 手机 keycode → 蓝牙 HID usage 映射 */
@@ -1313,6 +1511,22 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** SPEC-018：直连长按，盒端执行 ACTION_LONG_CLICK */
+    private void lanPressLong(final int code) {
+        if (lan == null) {
+            setStatus(getString(R.string.lan_not_paired), false);
+            return;
+        }
+        worker.submit(() -> {
+            try {
+                lan.keyLong(code);
+                setStatus(getString(R.string.lan_status, curHost()), true);
+            } catch (Exception e) {
+                setStatus(Errors.friendly(this, e), false);
+            }
+        });
+    }
+
     private void doText(final String t) {
         if (lanMode && lan != null) {
             worker.submit(() -> {
@@ -1408,6 +1622,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     btMode = false;
+                    stopAirMouse(); // SPEC-018：蓝牙断开后退出飞鼠
                     updateModeUi();
                     // 切设备时主动断开旧目标，不覆盖新设备的直连状态文案
                     if (!lanMode) setStatus(getString(R.string.bt_disconnected, n), false);
@@ -1556,6 +1771,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopAirMouse(); // SPEC-018：退出界面停止陀螺仪并释放鼠标按键
         if (bt != null) bt.stop();
         worker.shutdownNow();
     }

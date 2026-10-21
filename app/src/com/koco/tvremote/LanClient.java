@@ -84,6 +84,12 @@ public class LanClient {
         if (!r.startsWith("OK")) throw new Exception(r);
     }
 
+    /** SPEC-018：长按（仅 OK 23），盒端执行 ACTION_LONG_CLICK */
+    public void keyLong(int code) throws Exception {
+        String r = cmd("KEYLONG " + token + " " + code, 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
     public void text(String t) throws Exception {
         String b64 = Base64.getEncoder().encodeToString(t.getBytes("UTF-8"));
         String r = cmd("TEXT " + token + " " + b64, 5000);
