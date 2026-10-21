@@ -7,15 +7,17 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -27,14 +29,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 盒子端的遥控服务：监听 TCP 8899，收到命令后用 su 注入按键。
- * 不依赖开发者选项 / 无线调试，开机自启。
+ * 盒子端的遥控服务：监听 TCP 8899，收到命令后经无障碍服务注入。
+ * 不需要 root / 开发者选项 / 无线调试，开机自启（SPEC-014）。
  *
  * 协议（每行一条，\n 结尾）：
  *   PAIR <6位配对码>          -> OK <token>
- *   KEY <token> <keycode>     -> OK
- *   TEXT <token> <base64>     -> OK
- *   APP <token> <包名>         -> OK
+ *   KEY <token> <keycode>     -> OK | ERR a11y | ERR cmd | ERR exec
+ *   TEXT <token> <base64>     -> OK | ERR a11y | ERR exec
+ *   APP <token> <包名>         -> OK | ERR exec
+ *   LIST <token>              -> OK <包名|base64(应用名),逗号分隔>
  *   PING                      -> PONG
  */
 public class ServerService extends Service {
@@ -43,7 +46,6 @@ public class ServerService extends Service {
     public static final int PORT = 8899;
     public static final int DISCOVERY_PORT = 8898;
     private static final String CH_ID = "tvremote";
-    private static final String SU = "/system/xbin/su";
 
     private ServerSocket server;
     private DatagramSocket udp;
@@ -56,7 +58,7 @@ public class ServerService extends Service {
         super.onCreate();
         sp = getSharedPreferences("srv", MODE_PRIVATE);
         ensurePairCode();
-        startForeground(1, buildNotification("遥控服务运行中"));
+        startForeground(1, buildNotification(getString(R.string.ntf_running)));
         new Thread(this::serveTcp, "tcp-accept").start();
         new Thread(this::broadcastLoop, "udp-broadcast").start();
     }
@@ -157,17 +159,36 @@ public class ServerService extends Service {
             }
 
             switch (p[0]) {
-                case "KEY":
+                case "KEY": {
                     if (p.length < 3) return "ERR arg";
-                    return keyevent(p[2]) ? "OK" : "ERR exec";
+                    int code;
+                    try {
+                        code = Integer.parseInt(p[2].trim());
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    switch (TvRemoteAccessibilityService.key(this, code)) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        case TvRemoteAccessibilityService.RES_UNSUPPORTED: return "ERR cmd";
+                        default: return "ERR exec";
+                    }
+                }
                 case "TEXT": {
                     if (p.length < 3) return "ERR arg";
                     String txt = new String(Base64.decode(p[2], Base64.NO_WRAP), "UTF-8");
-                    return text(txt) ? "OK" : "ERR exec";
+                    switch (TvRemoteAccessibilityService.text(txt)) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
                 }
                 case "APP":
                     if (p.length < 3) return "ERR arg";
                     return launch(p[2]) ? "OK" : "ERR exec";
+                case "LIST":
+                    // SPEC-016：返回第三方应用「包名|base64(应用名)」，逗号分隔
+                    return "OK " + listPackages();
                 default:
                     return "ERR cmd";
             }
@@ -176,41 +197,41 @@ public class ServerService extends Service {
         }
     }
 
-    // ---------------- 命令执行（su） ----------------
+    // ---------------- 应用与包管理（PackageManager，SPEC-014） ----------------
 
-    private boolean exec(String[] cmd) {
-        try {
-            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-                while (r.readLine() != null) { /* 丢弃输出 */ }
-            }
-            return p.waitFor() == 0;
-        } catch (Exception e) {
-            Log.e(TAG, "exec fail", e);
-            return false;
+    /** SPEC-016：列出第三方应用「包名|base64(应用名)」，逗号分隔；
+     *  应用名用 UTF-8 + NO_WRAP Base64，避免中文/空格/逗号破坏单行协议 */
+    private String listPackages() {
+        PackageManager pm = getPackageManager();
+        StringBuilder sb = new StringBuilder();
+        for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+            if ((ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0) continue;
+            String label = String.valueOf(pm.getApplicationLabel(ai));
+            if (sb.length() > 0) sb.append(',');
+            sb.append(ai.packageName).append('|').append(Base64.encodeToString(
+                    label.getBytes(java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP));
         }
+        return sb.toString();
     }
 
-    /** 注意：本机 su 是 toybox 版，语法为 su [WHO [COMMAND...]]，不能�� su -c；
-     *  monkey 是 shell 脚本，必须经 sh -c 才能执行 */
-    private boolean keyevent(String code) {
-        return exec(new String[]{SU, "root", "sh", "-c", "input keyevent " + code});
-    }
-
-    private boolean text(String t) {
-        String safe = t.replace(" ", "%s").replace("'", "");
-        return exec(new String[]{SU, "root", "sh", "-c", "input text '" + safe + "'"});
-    }
-
+    /** 用 PackageManager 取 LAUNCHER 意图；Settings 特判为系统设置 action */
     private boolean launch(String pkg) {
-        String cmd;
+        Intent i;
         if (pkg.equals("com.android.settings")) {
             // 该固件的 Settings 没有 LAUNCHER 入口，只能用 action 拉起
-            cmd = "am start -a android.settings.SETTINGS";
+            i = new Intent(Settings.ACTION_SETTINGS);
         } else {
-            cmd = "monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1";
+            i = getPackageManager().getLaunchIntentForPackage(pkg);
         }
-        return exec(new String[]{SU, "root", "sh", "-c", cmd});
+        if (i == null) return false;
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(i);
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "launch fail: " + pkg, e);
+            return false;
+        }
     }
 
     // ---------------- UDP 广播（供手机自动发现） ----------------
@@ -239,16 +260,16 @@ public class ServerService extends Service {
     private Notification buildNotification(String text) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = getSystemService(NotificationManager.class);
-            NotificationChannel ch = new NotificationChannel(CH_ID, "遥控服务",
+            NotificationChannel ch = new NotificationChannel(CH_ID, getString(R.string.ntf_channel),
                     NotificationManager.IMPORTANCE_LOW);
             nm.createNotificationChannel(ch);
         }
         Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CH_ID)
                 : new Notification.Builder(this);
-        return b.setContentTitle("TV 遥控服务")
+        return b.setContentTitle(getString(R.string.ntf_title))
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setSmallIcon(R.drawable.ic_stat)
                 .setOngoing(true)
                 .build();
     }

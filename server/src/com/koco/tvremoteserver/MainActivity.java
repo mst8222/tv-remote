@@ -1,19 +1,19 @@
 package com.koco.tvremoteserver;
 
 import android.app.Activity;
-import android.graphics.Color;
+import android.content.Intent;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -21,12 +21,18 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 盒子端界面：显示本机地址、端口、配对码和服务状态。
+ * 盒子端界面：显示服务状态、无障碍状态、配对码与本机地址（SPEC-008 / SPEC-014）。
  * 服务在 onCreate 时自动启动，之后开机也会自启。
  */
 public class MainActivity extends Activity {
 
-    private TextView statusView, ipView, codeView, rootView;
+    // SPEC-012 配色：与手机端同套设计语言（深底 + 分组卡片 + 单一蓝色强调）
+    static final int BG = 0xFF0A0E14, SURFACE = 0xFF141A24, ACCENT = 0xFF4F7CFF,
+            TXT = 0xFFEAEFF7, SUB = 0xFF8A94A6, DIMTXT = 0xFF5A6472,
+            GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A;
+
+    private TextView statusView, ipView, codeView, a11yView;
+    private GradientDrawable dotBg;
     private final Handler h = new Handler(Looper.getMainLooper());
 
     @Override
@@ -34,7 +40,6 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         setContentView(buildUi());
         ServerService.start(this);
-        checkRoot();
         tick();
     }
 
@@ -45,96 +50,139 @@ public class MainActivity extends Activity {
     private ViewGroup buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0B0F14);
-        root.setPadding(dp(32), dp(24), dp(32), dp(24));
+        root.setBackgroundColor(BG);
+        root.setPadding(dp(48), dp(36), dp(48), dp(36));
 
         TextView title = new TextView(this);
-        title.setText("TV 遥控服务");
-        title.setTextColor(0xFFE6EDF3);
+        title.setText(getString(R.string.ui_title));
+        title.setTextColor(TXT);
         title.setTextSize(26);
         root.addView(title);
 
-        statusView = new TextView(this);
-        statusView.setTextSize(16);
-        statusView.setTextColor(0xFF3FB950);
-        statusView.setPadding(0, dp(8), 0, dp(4));
-        root.addView(statusView);
+        // 服务状态卡：圆点 + 运行状态 + 无障碍服务状态（可点击跳设置）
+        LinearLayout statusCard = card(R.string.ui_grp_status);
+        statusCard.addView(buildStatusRow(), lpRow(dp(12)));
+        a11yView = new TextView(this);
+        a11yView.setTextSize(13);
+        a11yView.setTextColor(SUB);
+        a11yView.setPadding(0, dp(8), 0, 0);
+        // 盒子界面不响应触摸，同时设为可聚焦，便于物理遥控导航后按 OK
+        a11yView.setClickable(true);
+        a11yView.setFocusable(true);
+        a11yView.setOnClickListener(v -> openA11ySettings());
+        statusCard.addView(a11yView);
+        addCard(root, statusCard, dp(16));
 
-        rootView = new TextView(this);
-        rootView.setTextSize(15);
-        rootView.setTextColor(0xFF7D8590);
-        rootView.setPadding(0, 0, 0, dp(20));
-        root.addView(rootView);
-
-        TextView lbl = new TextView(this);
-        lbl.setText("手机 App 配对码");
-        lbl.setTextSize(16);
-        lbl.setTextColor(0xFF7D8590);
-        root.addView(lbl);
-
+        // 配对码卡：11sp 分组标题 + 大号蓝字
+        LinearLayout pairCard = card(R.string.ui_grp_pair);
         codeView = new TextView(this);
         codeView.setTextSize(64);
-        codeView.setTextColor(0xFF2563EB);
-        codeView.setLetterSpacing(0.2f);
-        codeView.setPadding(0, dp(4), 0, dp(16));
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(0xFF111820);
-        g.setCornerRadius(dp(16));
-        codeView.setBackground(g);
+        codeView.setTextColor(ACCENT);
+        codeView.setLetterSpacing(0.25f);
         codeView.setGravity(Gravity.CENTER);
-        codeView.setPadding(0, dp(16), 0, dp(16));
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(420), ViewGroup.LayoutParams.WRAP_CONTENT);
-        codeView.setLayoutParams(clp);
-        root.addView(codeView);
+        codeView.setPadding(0, dp(16), 0, dp(20));
+        pairCard.addView(codeView, lpRow(0));
+        addCard(root, pairCard, dp(16));
 
+        // 连接地址卡
+        LinearLayout addrCard = card(R.string.ui_grp_addr);
         ipView = new TextView(this);
         ipView.setTextSize(15);
-        ipView.setTextColor(0xFF7D8590);
-        ipView.setPadding(0, dp(16), 0, 0);
-        root.addView(ipView);
+        ipView.setTextColor(TXT);
+        ipView.setLineSpacing(dp(4), 1f);
+        ipView.setPadding(0, dp(4), 0, 0);
+        addrCard.addView(ipView, lpRow(0));
+        addCard(root, addrCard, dp(20));
 
         TextView tip = new TextView(this);
-        tip.setText("在手机 App 里选择「局域网直连」，输入上面 6 位配对码即可。\n"
-                + "之后每次开机服务都会自动启动，无需任何设置。");
+        tip.setText(getString(R.string.ui_tip));
         tip.setTextSize(13);
-        tip.setTextColor(0xFF5A6472);
-        tip.setPadding(0, dp(20), 0, 0);
+        tip.setTextColor(DIMTXT);
         tip.setLineSpacing(dp(4), 1f);
         root.addView(tip);
 
         ScrollView sv = new ScrollView(this);
-        sv.setBackgroundColor(0xFF0B0F14);
+        sv.setBackgroundColor(BG);
         sv.addView(root);
         return sv;
     }
 
+    /** SPEC-012 分组卡片：SURFACE 底 24dp 圆角，左上 12sp SUB 分组标题 */
+    private LinearLayout card(int titleRes) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(roundSurface());
+        c.setPadding(dp(24), dp(20), dp(24), dp(24));
+        TextView t = new TextView(this);
+        t.setText(getString(titleRes));
+        t.setTextColor(SUB);
+        t.setTextSize(12);
+        c.addView(t);
+        return c;
+    }
+
+    private GradientDrawable roundSurface() {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(SURFACE);
+        g.setCornerRadius(dp(24));
+        return g;
+    }
+
+    /** 卡片内子项的宽参数 */
+    private LinearLayout.LayoutParams lpRow(int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        return p;
+    }
+
+    private void addCard(LinearLayout root, View card, int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.topMargin = top;
+        root.addView(card, p);
+    }
+
+    /** 状态行：10dp 圆点 + 状态文字 */
+    private View buildStatusRow() {
+        LinearLayout srow = new LinearLayout(this);
+        srow.setOrientation(LinearLayout.HORIZONTAL);
+        srow.setGravity(Gravity.CENTER_VERTICAL);
+        dotBg = new GradientDrawable();
+        dotBg.setShape(GradientDrawable.OVAL);
+        dotBg.setColor(GREEN);
+        View dot = new View(this);
+        dot.setBackground(dotBg);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(dp(10), dp(10));
+        dlp.rightMargin = dp(8);
+        dot.setLayoutParams(dlp);
+        srow.addView(dot);
+        statusView = new TextView(this);
+        statusView.setTextSize(16);
+        statusView.setTextColor(GREEN);
+        srow.addView(statusView);
+        return srow;
+    }
+
     private void tick() {
         codeView.setText(ServerService.getPairCode(this));
-        ipView.setText("本机地址：" + localIp() + "   端口：" + ServerService.PORT
-                + "\n发现端口：" + ServerService.DISCOVERY_PORT);
-        statusView.setText("● 服务运行中");
+        ipView.setText(getString(R.string.ui_local_addr, localIp(),
+                ServerService.PORT, ServerService.DISCOVERY_PORT));
+        statusView.setText(getString(R.string.ui_running));
+        boolean a11y = TvRemoteAccessibilityService.isReady();
+        a11yView.setText(getString(a11y ? R.string.ui_a11y_ok : R.string.ui_a11y_missing));
+        a11yView.setTextColor(a11y ? GREEN : RED);
         h.postDelayed(this::tick, 3000);
     }
 
-    private void checkRoot() {
-        new Thread(() -> {
-            String out = "";
-            try {
-                Process p = new ProcessBuilder("/system/xbin/su", "root", "sh", "-c", "id")
-                        .redirectErrorStream(true).start();
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-                    String l;
-                    while ((l = r.readLine()) != null) out += l;
-                }
-                p.waitFor();
-            } catch (Exception ignored) {}
-            final boolean ok = out.contains("uid=0");
-            runOnUiThread(() -> {
-                rootView.setText(ok ? "root 权限：已获得（可注入按键）"
-                        : "root 权限：未获得 —— 按键会失败，请检查设备是否已 root");
-                rootView.setTextColor(ok ? 0xFF3FB950 : 0xFFF85149);
-            });
-        }).start();
+    /** SPEC-014：跳到系统无障碍设置，用户在那里开启本应用的服务 */
+    private void openA11ySettings() {
+        try {
+            Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception ignored) {
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -151,7 +199,7 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Exception ignored) {}
-        return "未连接网络";
+        return getString(R.string.ui_no_network);
     }
 
     @Override

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 手动编译 Android APK（不需要 Gradle）
-流程：生成密钥常量 → aapt2 link → javac → d8 → 打包 dex → zipalign → apksigner
+流程：aapt2 link → javac → d8 → 打包 dex → zipalign → apksigner
 """
 import os
 import shutil
@@ -42,36 +42,31 @@ def run(cmd, **kw):
     return r
 
 
-def gen_key_const():
-    import base64 as b64mod
-    pk8 = os.path.join(HERE, "keys", "adbkey.pk8")
-    b64 = "".join(open(pk8, "r", encoding="utf-8").read().split())
-    cert_der = os.path.join(HERE, "keys", "cert.der")
-    cert_b64 = ""
-    if os.path.exists(cert_der):
-        cert_b64 = b64mod.b64encode(open(cert_der, "rb").read()).decode()
-    src = os.path.join(APP, "src", "com", "koco", "tvremote", "KeyConst.java")
-    with open(src, "w", encoding="utf-8") as f:
-        f.write("package com.koco.tvremote;\n\n")
-        f.write("public final class KeyConst {\n")
-        f.write('    public static final String PRIV =\n')
-        lines = [b64[i:i + 76] for i in range(0, len(b64), 76)]
-        f.write('        "' + '\\n" +\n        "'.join(lines) + '";\n')
-        f.write('\n    public static final String CERT =\n')
-        clines = [cert_b64[i:i + 76] for i in range(0, len(cert_b64), 76)]
-        f.write('        "' + '\\n" +\n        "'.join(clines) + '";\n')
-        f.write("}\n")
-    print(f"[1/7] 密钥常量已生成 (key {len(lines)} 行, cert {len(clines)} 行)")
+def compile_resources():
+    """编译模块 res 目录为 flat 产物；res 不存在时跳过（两模块可独立无资源）"""
+    resdir = os.path.join(APP, "res")
+    if not os.path.isdir(resdir):
+        return []
+    flat = os.path.join(APP, "res.zip")
+    if os.path.exists(flat):
+        os.remove(flat)
+    run([AAPT2, "compile", "--dir", resdir, "-o", flat])
+    print(f"    资源已编译 ({resdir})")
+    return [flat]
 
 
-def link_resources():
+def link_resources(extra):
     base = os.path.join(HERE, "base.apk")
     if os.path.exists(base):
         os.remove(base)
+    # --java 输出 R.java，供 javac 编译引用资源
+    gendir = os.path.join(HERE, "gen", MODULE)
+    os.makedirs(gendir, exist_ok=True)
     run([AAPT2, "link", "-o", base, "-I", ANDROID_JAR,
          "--manifest", os.path.join(APP, "AndroidManifest.xml"),
+         "--java", gendir,
          "--min-sdk-version", "26", "--target-sdk-version", "30",
-         "--version-code", "1", "--version-name", "1.0"])
+         "--version-code", "1", "--version-name", "1.0"] + extra)
     print("[2/7] 资源与清单已链接")
     return base
 
@@ -83,6 +78,11 @@ def compile_java():
     os.makedirs(cls)
     srcs = []
     for root, _, files in os.walk(os.path.join(APP, "src")):
+        for f in files:
+            if f.endswith(".java"):
+                srcs.append(os.path.join(root, f))
+    # 加入 aapt2 生成的 R.java
+    for root, _, files in os.walk(os.path.join(HERE, "gen", MODULE)):
         for f in files:
             if f.endswith(".java"):
                 srcs.append(os.path.join(root, f))
@@ -150,21 +150,12 @@ def verify():
 
 
 if __name__ == "__main__":
-    if MODULE == "app" and not os.path.exists(os.path.join(HERE, "keys", "adbkey.pk8")):
-        print("[x] 缺少 keys/adbkey.pk8（设备 ADB 授权用的私钥，不入库）")
-        print("    请从备份恢复；或重新生成后，把新公钥写入盒子 /data/misc/adb/adb_keys：")
-        print("      cd tools && javac AdbTest.java && java AdbTest gen")
-        sys.exit(1)
-    if MODULE == "server" and not os.path.exists(os.path.join(HERE, "keys", "adbkey.pk8")):
-        pass  # server 模块不需要 ADB 私钥
     for p, n in [(AAPT2, "aapt2"), (D8, "d8"), (ZIPALIGN, "zipalign"),
                  (APKSIGNER, "apksigner"), (ANDROID_JAR, "android.jar")]:
         if not os.path.exists(p):
             print(f"[x] 缺少 {n}: {p}")
             sys.exit(1)
-    if MODULE == "app":
-        gen_key_const()
-    base = link_resources()
+    base = link_resources(compile_resources())
     compile_java()
     dex()
     pack(base)

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 盒子端全部界面与通知文案；默认资源为中文，英文见 values-en（SPEC-009） -->
+<resources>
+    <string name="app_name">TV遥控服务</string>
+
+    <!-- 界面 -->
+    <string name="ui_title">TV 遥控服务</string>
+    <string name="ui_running">服务运行中</string>
+    <string name="ui_grp_status">服务状态</string>
+    <string name="ui_grp_pair">配对码</string>
+    <string name="ui_grp_addr">连接地址</string>
+    <string name="ui_local_addr">本机地址：%1$s　端口：%2$d\n发现端口：%3$d</string>
+    <string name="ui_no_network">未连接网络</string>
+    <string name="ui_a11y_ok">无障碍服务：已开启（按键可用）</string>
+    <string name="ui_a11y_missing">无障碍服务：未开启（点此开启，开启后才能遥控）</string>
+    <string name="ui_tip">第一次使用请在系统「设置 → 无障碍」里开启「TV遥控服务」，不需要 root。\n然后在手机 App 里选择「直连」或「蓝牙」，输入上面 6 位配对码即可。\n之后每次开机（包括断电重启）服务都会自动启动。</string>
+    <string name="a11y_desc">接收手机发来的遥控指令，执行返回、主页、方向键、音量与文字输入等操作。</string>
+
+    <!-- 前台通知 -->
+    <string name="ntf_channel">遥控服务</string>
+    <string name="ntf_title">TV 遥控服务</string>
+    <string name="ntf_running">遥控服务运行中</string>
+</resources>

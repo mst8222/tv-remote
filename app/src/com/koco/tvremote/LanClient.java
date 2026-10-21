@@ -8,7 +8,12 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * 直连盒子端「TV遥控服务」的客户端。
@@ -30,10 +35,6 @@ public class LanClient {
         this.host = host;
         this.port = port;
         this.token = token;
-    }
-
-    public boolean isConnected() {
-        return sock != null && sock.isConnected() && !sock.isClosed();
     }
 
     /** 配对：用 6 位配对码换取 token */
@@ -63,15 +64,19 @@ public class LanClient {
         out = new PrintWriter(new OutputStreamWriter(s.getOutputStream()), true);
     }
 
+    /** SPEC-011 FR-11-7：每条命令短连接——发前建立、应答即关。
+     *  服务器 30 秒空闲即回收连接，长连接复用会让客户端停留在假活状态
+     *  （isConnected 对对端关闭不可见），下一次按键报「连接断开」。 */
     private String cmd(String line, int timeoutMs) throws Exception {
-        if (!isConnected()) open(timeoutMs);
-        out.println(line);
-        String resp = in.readLine();
-        if (resp == null) {
+        open(timeoutMs);
+        try {
+            out.println(line);
+            String resp = in.readLine();
+            if (resp == null) throw new Exception("连接断开");
+            return resp;
+        } finally {
             close();
-            throw new Exception("连接断开");
         }
-        return resp;
     }
 
     public void key(int code) throws Exception {
@@ -88,6 +93,13 @@ public class LanClient {
     public void launch(String pkg) throws Exception {
         String r = cmd("APP " + token + " " + pkg, 6000);
         if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-016：列出盒子第三方应用，载荷为「包名|base64(应用名)」逗号分隔 */
+    public String list() throws Exception {
+        String r = cmd("LIST " + token, 6000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+        return r.substring(3).trim();
     }
 
     public void close() {
@@ -114,5 +126,38 @@ public class LanClient {
             if (ds != null) ds.close();
         }
         return null;
+    }
+
+    /** SPEC-013 FR-13-5：在 waitMs 内收集所有盒子广播，返回 [名称, IP] 列表（按 IP 去重） */
+    public static List<String[]> discoverAll(int waitMs) {
+        List<String[]> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        DatagramSocket ds = null;
+        try {
+            ds = new DatagramSocket(DISCOVERY_PORT);
+            ds.setBroadcast(true);
+            ds.setSoTimeout(400);
+            long end = System.currentTimeMillis() + waitMs;
+            byte[] buf = new byte[256];
+            while (System.currentTimeMillis() < end) {
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                try {
+                    ds.receive(p);
+                } catch (SocketTimeoutException te) {
+                    continue;
+                }
+                String msg = new String(p.getData(), 0, p.getLength(), "UTF-8");
+                if (!msg.startsWith("TVREMOTE|")) continue;
+                String ip = p.getAddress().getHostAddress();
+                if (!seen.add(ip)) continue;
+                String[] parts = msg.split("\\|", 3);
+                String name = parts.length > 2 && !parts[2].isEmpty() ? parts[2] : ip;
+                out.add(new String[]{name, ip});
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (ds != null) ds.close();
+        }
+        return out;
     }
 }

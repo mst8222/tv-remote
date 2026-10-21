@@ -1,97 +1,177 @@
 package com.koco.tvremote;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.app.Dialog;
+import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.os.LocaleList;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
-import android.net.nsd.NsdManager;
-import android.net.nsd.NsdServiceInfo;
+import android.graphics.drawable.RippleDrawable;
+import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.nio.charset.StandardCharsets;
+import java.text.Collator;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * 手机端主界面（纯 Java 构建，无 XML layout，SPEC-008 重新设计）。
+ * 布局自上而下：头部（设备名+状态徽标）→ 模式选择器（直连/蓝牙）→
+ * 十字导航 → 系统键两行 → 文字输入 → 应用快捷。
+ * SPEC-013：ADB 控制方案已移除，按键只走直连或蓝牙 HID。
+ */
 public class MainActivity extends Activity {
 
-    static final int BG = 0xFF0B0F14, BTN = 0xFF182029, ACCENT = 0xFF2563EB,
-            TXT = 0xFFE6EDF3, MUTED = 0xFF7D8590, DIM = 0xFF111820;
+    // SPEC-012 配色：纯净深底 + 分组卡片 + 单一蓝色强调
+    static final int BG = 0xFF0A0E14, SURFACE = 0xFF141A24, SURFACE2 = 0xFF1C2430,
+            ACCENT = 0xFF4F7CFF, TXT = 0xFFEAEFF7, SUB = 0xFF8A94A6, DIM = 0xFF232C3A,
+            GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A, POWER = 0xFFFF6B6B;
 
-    private AdbClient adb;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private TextView status;
     private TextView devName;
     private SharedPreferences sp;
-    private NsdManager nsd;
-    private NsdManager.DiscoveryListener discovery;
-    private NsdManager.DiscoveryListener discovery2;
     private BtHid bt;
+    private BtHid.StateListener btListener;
     private boolean btMode = false;
-    private Button modeBtn;
+    private TextView modeLan, modeBt;
+    private GradientDrawable dotBg;
     private LanClient lan;
     private boolean lanMode = false;
-    private String lanHost = "";
-    private String lanToken = "";
+    // SPEC-012：应用卡动态挂载/重建用
+    private LinearLayout column;
+    private View appsCard;
+
+    /** SPEC-011：直连配对按设备 IP 持久化，控制目标恒为当前设备 */
+    private String tokenOf(String host) { return sp.getString("lan_" + host, ""); }
+
+    private void saveToken(String host, String tok) {
+        sp.edit().putString("lan_" + host, tok).apply();
+    }
+
+    /** SPEC-015：按设备记忆最后成功使用的连接方式与蓝牙目标 */
+    private String modeOf(String host) { return sp.getString("mode_" + host, "lan"); }
+
+    private void saveMode(String host, String mode) {
+        sp.edit().putString("mode_" + host, mode).apply();
+    }
+
+    private String btAddrOf(String host) { return sp.getString("bt_" + host, ""); }
+
+    private void saveBtAddr(String host, String addr) {
+        sp.edit().putString("bt_" + host, addr).apply();
+    }
+
+    private void clearDevicePrefs(String host) {
+        sp.edit().remove("mode_" + host).remove("bt_" + host).apply();
+    }
+
+    /** SPEC-009：解析生效语言（system/zh/en）。
+     *  system 取系统主语言 LocaleList.getDefault()：该机应用资源里的 localeList
+     *  顺序与系统不一致（应用内为 [en_US, zh_CN-Hans, de_BE]，系统为
+     *  [zh_CN-Hans, de_BE, en_US]），不能用应用 Configuration 判断系统语言。 */
+    @Override
+    protected void attachBaseContext(Context base) {
+        String lang = base.getSharedPreferences("tvremote", MODE_PRIVATE)
+                .getString("lang", "system");
+        Locale loc;
+        if ("zh".equals(lang)) {
+            loc = Locale.SIMPLIFIED_CHINESE;
+        } else if ("en".equals(lang)) {
+            loc = Locale.ENGLISH;
+        } else {
+            Locale sys = LocaleList.getDefault().get(0);
+            if ("zh".equals(sys.getLanguage())) loc = sys;
+            else if ("en".equals(sys.getLanguage())) loc = Locale.ENGLISH;
+            else loc = Locale.SIMPLIFIED_CHINESE;  // 其他系统语言回落中文默认资源
+        }
+        Configuration cfg = new Configuration(base.getResources().getConfiguration());
+        cfg.setLocale(loc);
+        super.attachBaseContext(base.createConfigurationContext(cfg));
+    }
 
     /** 设备表，每项 {名称, IP, 端口} —— 可扫描添加，持久化保存 */
     private final List<String[]> devices = new ArrayList<>();
     private int cur = 0;
+
+    // ---------------- 多尺寸档位（SPEC-008 FR-8-13） ----------------
+
+    private boolean compact, tablet;
+    private int outer, padD, arrowLen, arrowText, okD, okText, sysLen, sysIcon, keyH, appIcon, appText;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("tvremote", MODE_PRIVATE);
         loadDevices();
-        lanHost = sp.getString("lanHost", "");
-        lanToken = sp.getString("lanToken", "");
-        try {
-            adb = new AdbClient(KeyConst.PRIV);
-        } catch (Exception e) {
-            Toast.makeText(this, "密钥初始化失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            return;
-        }
         setContentView(buildUi());
-        connectAsync();
+        updateModeUi();
+        // SPEC-015：恢复当前设备上次成功使用的连接方式（新设备默认直连）
+        applyDeviceMode();
+    }
+
+    /** 回到前台时恢复被系统注销的蓝牙 HID 注册（SPEC-005 FR-5-7） */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (btMode && bt != null && btListener != null && !bt.isReady()) {
+            bt.start(btListener);
+        }
     }
 
     private String curHost() { return devices.get(cur)[1]; }
-
-    private int curPort() { return Integer.parseInt(devices.get(cur)[2]); }
 
     // ---------------- 设备持久化 ----------------
 
     private void loadDevices() {
         devices.clear();
+        // SPEC-011 一次性迁移：旧版全局配对键转存为按 IP 的键后删除
+        String oldHost = sp.getString("lanHost", "");
+        String oldTok = sp.getString("lanToken", "");
+        if (!oldHost.isEmpty() && !oldTok.isEmpty()) {
+            sp.edit().putString("lan_" + oldHost, oldTok)
+                    .remove("lanHost").remove("lanToken").apply();
+        }
         String raw = sp.getString("devs", "");
         if (!raw.isEmpty()) {
+            // SPEC-013：设备表只保留 名称|IP；旧版三段（名称|IP|端口）忽略端口
             for (String line : raw.split("\n")) {
                 String[] p = line.split("\\|");
-                if (p.length >= 3 && !p[0].isEmpty()) devices.add(new String[]{p[0], p[1], p[2]});
+                if (p.length >= 2 && !p[0].isEmpty() && !p[1].isEmpty()) {
+                    devices.add(new String[]{p[0], p[1]});
+                }
             }
         }
         if (devices.isEmpty()) {
-            devices.add(new String[]{"荐片TV · RK3566", "192.168.3.125", "5555"});
-            devices.add(new String[]{"三星 Fold3 · 安卓13", "192.168.3.38", "5555"});
+            devices.add(new String[]{"荐片TV · RK3566", "192.168.3.125"});
+            devices.add(new String[]{"三星 Fold3 · 安卓13", "192.168.3.38"});
             saveDevices();
         }
         String saved = sp.getString("cur", "");
@@ -106,29 +186,93 @@ public class MainActivity extends Activity {
     private void saveDevices() {
         StringBuilder sb = new StringBuilder();
         for (String[] d : devices) {
-            sb.append(d[0]).append('|').append(d[1]).append('|').append(d[2]).append('\n');
+            sb.append(d[0]).append('|').append(d[1]).append('\n');
         }
         sp.edit().putString("devs", sb.toString().trim())
                 .putString("cur", devices.isEmpty() ? "" : devices.get(cur)[0]).apply();
     }
 
-    // ---------------- UI ----------------
+    // ---------------- UI 构建 ----------------
 
     private int dp(float v) {
         return (int) (v * getResources().getDisplayMetrics().density);
     }
 
+    /** 按屏幕宽度取三档尺寸参数：小屏 <360 / 标准 / 平板 >=600（SPEC-012 v2 结构） */
+    private void initSizes() {
+        int sw = getResources().getConfiguration().screenWidthDp;
+        compact = sw < 360;
+        tablet = sw >= 600;
+        outer = compact ? 10 : tablet ? 24 : 14;        // 页面与卡片外边距
+        padD = compact ? 200 : tablet ? 280 : 240;      // 遥控大圆盘直径
+        arrowLen = compact ? 36 : tablet ? 46 : 40;     // 四向小圆键直径
+        arrowText = compact ? 14 : tablet ? 18 : 16;    // 方向箭头字号
+        okD = compact ? 72 : tablet ? 96 : 84;          // 中心 OK 直径
+        okText = compact ? 15 : tablet ? 19 : 17;       // OK 字号
+        sysLen = compact ? 46 : tablet ? 56 : 52;       // 圆形图标键/静音直径
+        sysIcon = compact ? 16 : tablet ? 20 : 18;      // 图标键符号字号
+        keyH = compact ? 44 : tablet ? 52 : 48;         // 输入行/音量胶囊高
+        appIcon = compact ? 48 : tablet ? 64 : 56;      // 应用圆形图标位直径
+        appText = compact ? 11 : tablet ? 13 : 12;      // 应用名字号
+    }
+
     private View buildUi() {
+        initSizes();
+        // 顶栏（设备信息 + 模式栏）固定在顶部，不随卡片区滚动
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
-        root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setPadding(dp(outer), dp(outer), dp(outer), 0);
+        root.addView(buildHeader(), lp(-1, -2, 0, 0, 0, dp(10)));
+        root.addView(buildModeBar(), lp(-1, -2, 0, 0, 0, dp(12)));
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackground(round(DIM, 10, 0));
-        bar.setPadding(dp(12), dp(9), dp(6), dp(9));
+        column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.addView(card(R.string.grp_remote, buildRemote()), lp(-1, -2, 0, 0, 0, dp(10)));
+        column.addView(card(R.string.grp_input, buildInput()), lp(-1, -2, 0, 0, 0, dp(10)));
+        // 应用卡按缓存载荷先渲染，随后 ensureApps 异步刷新（SPEC-016 FR-16-6）
+        rebuildApps(parseApps(sp.getString("apps_" + curHost(), "")));
+
+        ScrollView sv = new ScrollView(this);
+        sv.setBackgroundColor(BG);
+        // 不开 fillViewport：内容短于视口时会把最后一张卡拉伸到底（平板档实测）
+        sv.setClipToPadding(false);
+        sv.setPadding(0, 0, 0, dp(outer));
+        if (tablet) {
+            // 平板：内容区最大 520dp 居中，避免按键过宽
+            FrameLayout wrap = new FrameLayout(this);
+            int maxW = Math.min(dp(520),
+                    getResources().getDisplayMetrics().widthPixels - dp(outer * 2));
+            wrap.addView(column, new FrameLayout.LayoutParams(
+                    maxW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
+            sv.addView(wrap);
+        } else {
+            sv.addView(column);
+        }
+        root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        return root;
+    }
+
+    /** SPEC-012 分组卡片：SURFACE 底 20dp 圆角，左上 11sp SUB 分组标题 + 内容 */
+    private View card(int titleRes, View content) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(round(SURFACE, 20, 0));
+        c.setPadding(dp(14), dp(12), dp(14), dp(14));
+        TextView t = new TextView(this);
+        t.setText(getString(titleRes));
+        t.setTextColor(SUB);
+        t.setTextSize(11);
+        c.addView(t, lp(-2, -2, 0, 0, 0, dp(10)));
+        c.addView(content, lp(-1, -2, 0, 0, 0, 0));
+        return c;
+    }
+
+    /** 头部：设备名（点击弹选择器）+ 状态徽标（彩色圆点+状态文字） */
+    private View buildHeader() {
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
@@ -137,89 +281,297 @@ public class MainActivity extends Activity {
         devName = new TextView(this);
         devName.setText(devices.get(cur)[0] + "  ▾");
         devName.setTextColor(TXT);
-        devName.setTextSize(13);
+        devName.setTextSize(17);
         info.addView(devName);
 
+        LinearLayout srow = new LinearLayout(this);
+        srow.setOrientation(LinearLayout.HORIZONTAL);
+        srow.setGravity(Gravity.CENTER_VERTICAL);
+        srow.setPadding(0, dp(2), 0, 0);
+
+        dotBg = new GradientDrawable();
+        dotBg.setShape(GradientDrawable.OVAL);
+        dotBg.setColor(SUB);
+        View dot = new View(this);
+        dot.setBackground(dotBg);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(dp(8), dp(8));
+        dlp.rightMargin = dp(6);
+        dot.setLayoutParams(dlp);
+        srow.addView(dot);
+
         status = new TextView(this);
-        status.setText("正在连接 " + curHost() + " …");
-        status.setTextColor(MUTED);
-        status.setTextSize(11);
-        info.addView(status);
+        status.setTextColor(SUB);
+        status.setTextSize(12);
+        srow.addView(status);
 
+        info.addView(srow);
+        head.addView(info);
         info.setOnClickListener(v -> showDevicePicker());
-        bar.addView(info);
 
-        modeBtn = flat("ADB", MUTED);
-        modeBtn.setOnClickListener(v -> toggleMode());
-        bar.addView(modeBtn);
+        // 语言切换入口（SPEC-009 FR-9-3）：固定「中/EN」不随语言变化，一眼可辨
+        TextView langBtn = new TextView(this);
+        langBtn.setText("中/EN");
+        langBtn.setTextColor(SUB);
+        langBtn.setTextSize(12);
+        langBtn.setGravity(Gravity.CENTER);
+        langBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+        langBtn.setBackground(ripple(DIM, 999, 0));
+        langBtn.setOnClickListener(v -> showLangDialog());
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        llp.leftMargin = dp(10);
+        head.addView(langBtn, llp);
+        return head;
+    }
 
-        Button lanBtn = flat("直连", MUTED);
-        lanBtn.setOnClickListener(v -> showLanDialog());
-        lanBtn.setOnLongClickListener(v -> {
-            // 长按 = 清除配对信息，重新配对（盒子 IP 变了时用）
-            lanHost = "";
-            lanToken = "";
+    /** SPEC-009 FR-9-3/4：语言三选一对话框，选择后持久化并重建 Activity 立即生效 */
+    private void showLangDialog() {
+        String cur = sp.getString("lang", "system");
+        String[] vals = {"system", "zh", "en"};
+        String[] opts = {getString(R.string.lang_system),
+                getString(R.string.lang_zh), getString(R.string.lang_en)};
+        int checked = "zh".equals(cur) ? 1 : "en".equals(cur) ? 2 : 0;
+        Sheet sheet = new Sheet(getString(R.string.lang_title), null);
+        for (int i = 0; i < opts.length; i++) {
+            final String v = vals[i];
+            sheet.row(opts[i], null, i == checked, () -> {
+                sp.edit().putString("lang", v).apply();
+                recreate();
+            });
+        }
+        sheet.action(getString(R.string.cancel), false, SUB).show();
+    }
+
+    /** 模式栏：两段胶囊选择器（直连/蓝牙）+ 扫描 + 添加（SPEC-013 FR-13-2） */
+    private View buildModeBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        seg.setBackground(round(DIM, 999, 0));
+        seg.setPadding(dp(3), dp(3), dp(3), dp(3));
+        seg.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        modeLan = segBtn(getString(R.string.mode_lan));
+        modeLan.setOnClickListener(v -> selectMode("lan"));
+        // 长按直连段 = 清除当前设备的配对信息，重新配对（盒子重置或换盒子时用）
+        modeLan.setOnLongClickListener(v -> {
+            sp.edit().remove("lan_" + curHost()).apply();
             lan = null;
             lanMode = false;
-            sp.edit().remove("lanHost").remove("lanToken").apply();
-            Toast.makeText(this, "已清除配对，请重新配对", Toast.LENGTH_SHORT).show();
+            updateModeUi();
+            Toast.makeText(this, getString(R.string.pairing_cleared), Toast.LENGTH_SHORT).show();
             showLanDialog();
             return true;
         });
-        bar.addView(lanBtn);
+        modeBt = segBtn(getString(R.string.mode_bt));
+        modeBt.setOnClickListener(v -> selectMode("bt"));
 
-        Button scan = flat("扫描", MUTED);
-        scan.setOnClickListener(v -> startScan());
-        bar.addView(scan);
+        LinearLayout.LayoutParams sp1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        sp1.rightMargin = dp(3);
+        seg.addView(modeLan, sp1);
+        seg.addView(modeBt, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        bar.addView(seg);
 
-        Button add = flat("添加", MUTED);
-        add.setOnClickListener(v -> showAddDialog());
-        bar.addView(add);
+        bar.addView(flat(getString(R.string.scan), v -> startScan()));
+        bar.addView(flat(getString(R.string.add), v -> showAddDialog()));
+        return bar;
+    }
 
-        root.addView(bar, lp(-1, -2, 0, 0, 0, dp(12)));
+    // ---------------- 遥控器主卡（SPEC-012 v2：大圆盘十字 + 圆形图标键 + 音量胶囊） ----------------
 
-        LinearLayout dpad = new LinearLayout(this);
-        dpad.setOrientation(LinearLayout.VERTICAL);
-        dpad.setGravity(Gravity.CENTER_HORIZONTAL);
-        addDpadRow(dpad, false, 21, 19);
-        addDpadRow(dpad, true, 21, 23);
-        addDpadRow(dpad, false, 21, 20);
-        root.addView(dpad, lp(-1, -2, 0, 0, 0, dp(10)));
+    /** 遥控器主卡内容：大圆盘十字导航 + 四个圆形图标键 + [− 音量 +] 胶囊与静音圆键 */
+    private View buildRemote() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.addView(buildDpadDisc());
+        box.addView(buildSysRow(), lp(-1, -2, 0, dp(14), 0, 0));
+        box.addView(buildVolRow(), lp(-1, -2, 0, dp(12), 0, 0));
+        return box;
+    }
 
-        LinearLayout r1 = row();
-        r1.addView(key("返回", 4), w(1));
-        r1.addView(key("主页", 3), w(1));
-        r1.addView(key("菜单", 82), w(1));
-        root.addView(r1, lp(-1, -2, 0, 0, 0, dp(8)));
+    /** 大圆盘：整圆盘面 + 四向小圆键嵌盘缘 + 中心 OK 光环圈（参考图综合）。
+     *  容器与盘面严格同尺寸（d x d），四个方向键按相同内边距定位，
+     *  保证四键在环状背景的上下左右绝对对称。 */
+    private View buildDpadDisc() {
+        FrameLayout pad = new FrameLayout(this);
+        int avail = getResources().getDisplayMetrics().widthPixels - dp(outer * 2) - dp(28);
+        if (tablet) avail = Math.min(avail, dp(520) - dp(28));
+        final int d = Math.min(dp(padD), avail);
+        pad.setLayoutParams(new LinearLayout.LayoutParams(d, d));
 
-        LinearLayout r2 = row();
-        r2.addView(key("音量+", 24), w(1));
-        r2.addView(key("音量−", 25), w(1));
-        r2.addView(key("静音", 164), w(1));
-        r2.addView(key("电源", 26), w(1));
-        root.addView(r2, lp(-1, -2, 0, 0, 0, dp(10)));
+        GradientDrawable disc = new GradientDrawable();
+        disc.setShape(GradientDrawable.OVAL);
+        disc.setColor(0xFF1B2432);
+        disc.setStroke(1, 0xFF2A3547);
+        View plate = new View(this);
+        plate.setBackground(disc);
+        pad.addView(plate, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        LinearLayout r3 = new LinearLayout(this);
-        r3.setOrientation(LinearLayout.HORIZONTAL);
-        EditText et = new EditText(this);
-        et.setHint("输入文字（搜索/账号）");
-        et.setHintTextColor(0xFF5A6472);
+        int m = dp(14);
+        padKey(pad, "▲", 19, Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0, m, 0, 0);
+        padKey(pad, "▼", 20, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 0, 0, 0, m);
+        padKey(pad, "◀", 21, Gravity.LEFT | Gravity.CENTER_VERTICAL, m, 0, 0, 0);
+        padKey(pad, "▶", 22, Gravity.RIGHT | Gravity.CENTER_VERTICAL, 0, 0, m, 0);
+
+        TextView ok = new TextView(this);
+        ok.setText("OK");
+        ok.setTextColor(Color.WHITE);
+        ok.setTypeface(null, android.graphics.Typeface.BOLD);
+        ok.setTextSize(okText);
+        ok.setGravity(Gravity.CENTER);
+        ok.setBackground(okRing());
+        ok.setOnClickListener(v -> press(23));
+        pad.addView(ok, new FrameLayout.LayoutParams(dp(okD), dp(okD), Gravity.CENTER));
+        return pad;
+    }
+
+    /** 四向小圆键（叠放在大圆盘上，gravity + margin 定位到盘缘）。
+     *  圆底用 #2E3A4C：比盘面 #1B2432 亮一档，保留按键轮廓感 */
+    private void padKey(FrameLayout pad, String arrow, int code, int gravity,
+                        int l, int t, int r, int b) {
+        TextView k = new TextView(this);
+        k.setText(arrow);
+        k.setTextColor(TXT);
+        k.setTextSize(arrowText);
+        k.setGravity(Gravity.CENTER);
+        k.setBackground(ripple(0xFF2E3A4C, arrowLen / 2f, 0));
+        k.setOnClickListener(v -> press(code));
+        FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(dp(arrowLen), dp(arrowLen), gravity);
+        p.setMargins(l, t, r, b);
+        pad.addView(k, p);
+    }
+
+    /** 中心 OK 光环圈：深底 + 3dp ACCENT 描边（参考图青环 OK 的深色版） */
+    private RippleDrawable okRing() {
+        GradientDrawable ring = new GradientDrawable();
+        ring.setShape(GradientDrawable.OVAL);
+        ring.setColor(0xFF101720);
+        ring.setStroke(dp(3), ACCENT);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setShape(GradientDrawable.OVAL);
+        mask.setColor(0xFFFFFFFF);
+        return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), ring, mask);
+    }
+
+    /** 圆形图标键行：返回 ← / 主页 ⌂ / 菜单 ≡ / 电源（红字回退）。
+     *  与音量行共用四列网格：每列等宽，按键在列内居中 */
+    private View buildSysRow() {
+        LinearLayout r = row();
+        r.addView(cell(circleKey("←", 4, sysIcon, TXT)), gridCol());
+        r.addView(cell(circleKey("⌂", 3, sysIcon, TXT)), gridCol());
+        r.addView(cell(circleKey("≡", 82, sysIcon, TXT)), gridCol());
+        r.addView(cell(circleKey(getString(R.string.key_power), 26, 11, POWER)), gridCol());
+        return r;
+    }
+
+    /** 音量行：[− 音量 +] 横胶囊 + 静音圆键占第四列。
+     *  胶囊左端内缩到返回圆键左边缘（与输入行同一起点），右端仍止于第三列右界，
+     *  静音圆键与电源键保持逐列对齐 */
+    private View buildVolRow() {
+        LinearLayout r = row();
+        int col = contentWidth() / 4;
+        int inset = Math.max(0, (col - dp(sysLen)) / 2);
+
+        LinearLayout pill = new LinearLayout(this);
+        pill.setOrientation(LinearLayout.HORIZONTAL);
+        pill.setGravity(Gravity.CENTER_VERTICAL);
+        pill.setBackground(ripple(SURFACE2, keyH / 2f, 0));
+        pill.addView(pillEnd("−", 25), pillCell());
+        TextView mid = new TextView(this);
+        mid.setText(getString(R.string.volume));
+        mid.setTextColor(SUB);
+        mid.setTextSize(12);
+        mid.setGravity(Gravity.CENTER);
+        pill.addView(mid, pillCell());
+        pill.addView(pillEnd("+", 24), pillCell());
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                col * 3 - inset, dp(keyH));
+        plp.leftMargin = inset;
+        r.addView(pill, plp);
+
+        r.addView(cell(circleKey(getString(R.string.key_mute), 164, 11, TXT)), gridCol());
+        return r;
+    }
+
+    /** 卡片内容区宽度（像素）：页面可用宽 - 卡片左右内边距 14dp×2（card() 的 padding） */
+    private int contentWidth() {
+        int w = getResources().getDisplayMetrics().widthPixels - dp(outer * 2);
+        if (tablet) w = Math.min(w, dp(520));
+        return w - dp(28);
+    }
+
+    /** 四列网格中的一列：等宽、高度自适应（圆键 52dp 不被压扁） */
+    private LinearLayout.LayoutParams gridCol() {
+        return new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+    }
+
+    /** 胶囊内部等分格（宽度按权重、高度撑满胶囊） */
+    private LinearLayout.LayoutParams pillCell() {
+        return new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+    }
+
+    /** 胶囊端键（− / +）：18sp 可点 */
+    private TextView pillEnd(String s, int code) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextColor(TXT);
+        t.setTextSize(18);
+        t.setGravity(Gravity.CENTER);
+        t.setOnClickListener(v -> press(code));
+        return t;
+    }
+
+    /** 圆形按键（图标/短文字），surrounding cell 居中 */
+    private TextView circleKey(String label, int code, int textSize, int color) {
+        TextView t = new TextView(this);
+        t.setText(label);
+        t.setTextColor(color);
+        t.setTextSize(textSize);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(ripple(SURFACE2, sysLen / 2f, 0));
+        t.setOnClickListener(v -> press(code));
+        return t;
+    }
+
+    /** 把定宽圆键包进居中 cell（等宽分布用） */
+    private FrameLayout cell(TextView key) {
+        FrameLayout c = new FrameLayout(this);
+        c.addView(key, new FrameLayout.LayoutParams(dp(sysLen), dp(sysLen), Gravity.CENTER));
+        return c;
+    }
+
+    /** 文字输入区（SPEC-012）：SURFACE2 输入框 + ACCENT 渐变发送胶囊 */
+    private View buildInput() {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+
+        final EditText et = new EditText(this);
+        et.setHint(getString(R.string.input_hint));
+        et.setHintTextColor(SUB);
         et.setTextColor(TXT);
         et.setTextSize(15);
         et.setSingleLine(true);
         et.setInputType(InputType.TYPE_CLASS_TEXT);
-        et.setBackground(round(DIM, 12, 0x1F2A35));
+        et.setBackground(round(SURFACE2, 12, 0));
         et.setPadding(dp(12), 0, dp(12), 0);
-        et.setLayoutParams(new LinearLayout.LayoutParams(0, dp(48), 1f));
-        r3.addView(et);
+        et.setLayoutParams(new LinearLayout.LayoutParams(0, dp(keyH), 1f));
+        r.addView(et);
 
-        Button send = new Button(this);
-        send.setText("发送");
+        TextView send = new TextView(this);
+        send.setText(getString(R.string.send));
         send.setTextColor(Color.WHITE);
         send.setTextSize(15);
-        send.setAllCaps(false);
-        send.setBackground(round(ACCENT, 12, 0));
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, dp(48));
+        send.setGravity(Gravity.CENTER);
+        send.setBackground(rippleGrad(999));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(76), dp(keyH));
         slp.leftMargin = dp(8);
         send.setLayoutParams(slp);
         send.setOnClickListener(v -> {
@@ -228,25 +580,121 @@ public class MainActivity extends Activity {
             doText(t);
             et.setText("");
         });
-        r3.addView(send);
-        root.addView(r3, lp(-1, -2, 0, 0, 0, dp(12)));
+        r.addView(send);
+        return r;
+    }
 
-        LinearLayout r4 = row();
-        r4.addView(app("设置", "com.android.settings"), w(1));
-        r4.addView(app("OK影视", "com.fongmi.android.tv"), w(1));
-        r4.addView(app("飞牛TV", "com.trim.tv"), w(1));
-        root.addView(r4, lp(-1, -2, 0, 0, 0, dp(8)));
+    // ---------------- 应用快捷动态化（SPEC-016） ----------------
 
-        LinearLayout r5 = row();
-        r5.addView(app("当贝桌面", "com.dangbei.tvlauncher"), w(1));
-        r5.addView(app("当贝市场", "com.dangbeimarket"), w(1));
-        r5.addView(app("Kodi", "org.xbmc.kodi19DV"), w(1));
-        root.addView(r5, lp(-1, -2, 0, 0, 0, 0));
+    /** 解析 LIST 载荷为 {应用名, 包名}：每项「包名|base64(应用名)」，
+     *  旧缓存的纯包名条目按包名显示，首次刷新后自然被替换 */
+    private List<String[]> parseApps(String raw) {
+        List<String[]> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String t : raw.split(",")) {
+            t = t.trim();
+            if (t.isEmpty()) continue;
+            int bar = t.indexOf('|');
+            String pkg = bar < 0 ? t : t.substring(0, bar);
+            String label = pkg;
+            if (bar > 0 && bar < t.length() - 1) {
+                try {
+                    label = new String(Base64.getDecoder().decode(t.substring(bar + 1)),
+                            StandardCharsets.UTF_8);
+                } catch (IllegalArgumentException ignored) {}
+            }
+            if (label.isEmpty()) label = pkg;
+            out.add(new String[]{label, pkg});
+        }
+        Collator col = Collator.getInstance(Locale.CHINA);
+        out.sort((a, b) -> col.compare(a[0], b[0]));
+        return out;
+    }
 
-        ScrollView sv = new ScrollView(this);
-        sv.setBackgroundColor(BG);
-        sv.addView(root);
-        return sv;
+    /** 重建应用卡：首项固定「设置」，其余为盒子全部第三方应用（SPEC-016 FR-16-3/4/5） */
+    private void rebuildApps(List<String[]> apps) {
+        if (column == null) return;
+        if (appsCard != null) {
+            column.removeView(appsCard);
+            appsCard = null;
+        }
+        List<String[]> visible = new ArrayList<>();
+        visible.add(new String[]{getString(R.string.app_settings), "com.android.settings"});
+        visible.addAll(apps);
+
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < visible.size(); i += 3) {
+            LinearLayout r = row();
+            for (int j = i; j < i + 3; j++) {
+                if (j < visible.size()) {
+                    r.addView(appCell(visible.get(j)[0], visible.get(j)[1]), wc(1));
+                } else {
+                    r.addView(new View(this), wc(1)); // 补位保持每行 3 列
+                }
+            }
+            grid.addView(r, lp(-1, -2, 0, 0, 0, rowGap(i, visible.size())));
+        }
+        appsCard = card(R.string.grp_apps, grid);
+        column.addView(appsCard); // 应用卡恒在列尾
+    }
+
+    /** 行间距：非最后一行 10dp */
+    private int rowGap(int i, int size) {
+        return i + 3 < size ? dp(10) : 0;
+    }
+
+    /** 应用按钮：圆形首字图标位 + 下方完整名称（手机桌面式两行以内） */
+    private View appCell(String label, String pkg) {
+        LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView icon = new TextView(this);
+        icon.setText(label.substring(0, 1));
+        icon.setTextColor(TXT);
+        icon.setTextSize(17);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(ripple(SURFACE2, appIcon / 2f, 0));
+        icon.setOnClickListener(v -> doApp(pkg));
+        cell.addView(icon, lp(dp(appIcon), dp(appIcon), 0, 0, 0, dp(8)));
+
+        TextView name = new TextView(this);
+        name.setText(label);
+        name.setTextColor(TXT);
+        name.setTextSize(appText);
+        name.setMaxLines(2);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setGravity(Gravity.CENTER);
+        cell.addView(name, lp(-1, -2, 0, 0, 0, 0));
+        return cell;
+    }
+
+    /** 异步拉取盒子已装包名（仅直连 LIST，SPEC-013 FR-13-6），成功写缓存并重建应用卡 */
+    private void ensureApps() {
+        final String host = curHost();
+        worker.submit(() -> {
+            String raw = null;
+            if (lanMode && lan != null) {
+                try {
+                    raw = lan.list();
+                } catch (Exception e) {
+                    // 拉取失败走缓存（FR-12-3），无缓存则应用卡保持隐藏
+                    android.util.Log.w("tvremote", "ensureApps pull failed", e);
+                }
+            }
+            if (raw != null) {
+                sp.edit().putString("apps_" + host, raw).apply();
+                android.util.Log.i("tvremote", "apps pull ok, len=" + raw.length()
+                        + " count=" + parseApps(raw).size());
+            } else {
+                raw = sp.getString("apps_" + host, "");
+                android.util.Log.i("tvremote", "apps pull failed, cache count="
+                        + parseApps(raw).size());
+            }
+            final List<String[]> apps = parseApps(raw);
+            runOnUiThread(() -> rebuildApps(apps));
+        });
     }
 
     private LinearLayout row() {
@@ -256,8 +704,16 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams w(float weight) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), weight);
-        p.rightMargin = dp(8);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(keyH), weight);
+        p.rightMargin = dp(6);
+        return p;
+    }
+
+    /** 等宽但高度自适应的权重参数（图标 + 下方名称这类纵向单元用） */
+    private LinearLayout.LayoutParams wc(float weight) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, weight);
+        p.rightMargin = dp(6);
         return p;
     }
 
@@ -267,92 +723,280 @@ public class MainActivity extends Activity {
         return p;
     }
 
-    private void addDpadRow(LinearLayout parent, boolean center, int leftCode, int midCode) {
-        LinearLayout r = new LinearLayout(this);
-        r.setOrientation(LinearLayout.HORIZONTAL);
-        r.setGravity(Gravity.CENTER_HORIZONTAL);
-
-        if (center) {
-            r.addView(navBtn("◀", leftCode), sq());
-            r.addView(okBtn(), sq());
-            r.addView(navBtn("▶", 22), sq());
-        } else {
-            r.addView(new View(this), sq());
-            r.addView(navBtn(midCode == 19 ? "▲" : "▼", midCode), sq());
-            r.addView(new View(this), sq());
-        }
-        parent.addView(r);
-    }
-
-    private LinearLayout.LayoutParams sq() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(78), dp(78));
-        p.setMargins(dp(5), dp(5), dp(5), dp(5));
-        return p;
-    }
-
-    private View navBtn(String label, int code) {
+    private TextView segBtn(String label) {
         TextView t = new TextView(this);
         t.setText(label);
-        t.setTextColor(TXT);
-        t.setTextSize(20);
+        t.setTextSize(13);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(round(BTN, 18, 0x263140));
-        t.setOnClickListener(v -> press(code));
         return t;
     }
 
-    private View okBtn() {
+    private TextView flat(String label, View.OnClickListener l) {
         TextView t = new TextView(this);
-        t.setText("OK");
-        t.setTextColor(Color.WHITE);
-        t.setTextSize(16);
-        t.setGravity(Gravity.CENTER);
-        t.setBackground(round(ACCENT, 40, 0));
-        t.setOnClickListener(v -> press(23));
+        t.setText(label);
+        t.setTextColor(SUB);
+        t.setTextSize(13);
+        t.setPadding(dp(10), dp(6), dp(4), dp(6));
+        t.setOnClickListener(l);
         return t;
     }
 
-    private Button key(String label, int code) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextColor(TXT);
-        b.setTextSize(15);
-        b.setAllCaps(false);
-        b.setBackground(round(BTN, 14, 0x263140));
-        b.setOnClickListener(v -> press(code));
-        return b;
+    /** 实心圆角 + ripple 触摸反馈（API 21+，minSdk 26 可用） */
+    private RippleDrawable ripple(int fill, float radiusDp, int stroke) {
+        GradientDrawable mask = new GradientDrawable();
+        mask.setCornerRadius(dp(radiusDp));
+        mask.setColor(0xFFFFFFFF);
+        return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                round(fill, radiusDp, stroke), mask);
     }
 
-    private Button app(String label, String pkg) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextColor(TXT);
-        b.setTextSize(14);
-        b.setAllCaps(false);
-        b.setBackground(round(BTN, 14, 0x263140));
-        b.setOnClickListener(v -> doApp(pkg));
-        return b;
+    /** ACCENT 渐变底（#5B8CFF→#3E6AF0）+ ripple，radiusDp 取直径一半即为圆 */
+    private RippleDrawable rippleGrad(float radiusDp) {
+        GradientDrawable mask = new GradientDrawable();
+        mask.setCornerRadius(dp(radiusDp));
+        mask.setColor(0xFFFFFFFF);
+        return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                accentGrad(radiusDp), mask);
     }
 
-    private Button flat(String label, int color) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextColor(color);
-        b.setTextSize(12);
-        b.setAllCaps(false);
-        b.setBackgroundColor(Color.TRANSPARENT);
-        b.setPadding(dp(6), 0, dp(6), 0);
-        b.setMinWidth(0);
-        b.setMinimumWidth(0);
-        return b;
+    private GradientDrawable accentGrad(float radiusDp) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF5B8CFF, 0xFF3E6AF0});
+        g.setCornerRadius(dp(radiusDp));
+        return g;
     }
 
-    private GradientDrawable round(int fill, int radiusDp, int stroke) {
+    private GradientDrawable round(int fill, float radiusDp, int stroke) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(fill);
         g.setCornerRadius(dp(radiusDp));
         if (stroke != 0) g.setStroke(1, stroke);
         return g;
+    }
+
+    // ---------------- 自绘弹窗（SPEC-012 FR-12-7：不使用原生 AlertDialog 外观） ----------------
+
+    /**
+     * 弹窗容器：深色 SURFACE 卡片 + 22dp 圆角 + 暗遮罩。
+     * 结构 = 标题（可选副标题）→ 内容区 → 底部动作行（右对齐）。
+     * 用法：new Sheet(标题, 副标题).row(...).action(...).show()
+     */
+    private class Sheet {
+        private final Dialog dialog;
+        private final LinearLayout body;
+        private final LinearLayout actions;
+
+        Sheet(String title, String subtitle) {
+            dialog = new Dialog(MainActivity.this);
+            dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+            LinearLayout card = new LinearLayout(MainActivity.this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(round(SURFACE, 22, 0));
+            card.setPadding(dp(20), dp(18), dp(20), dp(16));
+
+            TextView t = new TextView(MainActivity.this);
+            t.setText(title);
+            t.setTextColor(TXT);
+            t.setTextSize(18);
+            t.setTypeface(null, android.graphics.Typeface.BOLD);
+            card.addView(t, lp(-1, -2, 0, 0, 0, dp(subtitle == null ? 6 : 8)));
+
+            if (subtitle != null) {
+                TextView s = new TextView(MainActivity.this);
+                s.setText(subtitle);
+                s.setTextColor(SUB);
+                s.setTextSize(13);
+                s.setLineSpacing(dp(3), 1f);
+                card.addView(s, lp(-1, -2, 0, 0, 0, dp(6)));
+            }
+
+            body = new LinearLayout(MainActivity.this);
+            body.setOrientation(LinearLayout.VERTICAL);
+            card.addView(body, lp(-1, -2, 0, dp(4), 0, 0));
+
+            actions = new LinearLayout(MainActivity.this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+            card.addView(actions, lp(-1, -2, 0, dp(16), 0, 0));
+
+            FrameLayout root = new FrameLayout(MainActivity.this);
+            root.setPadding(dp(24), dp(24), dp(24), dp(24));
+            int maxW = Math.min(getResources().getDisplayMetrics().widthPixels - dp(48),
+                    dp(tablet ? 520 : 420));
+            root.addView(card, new FrameLayout.LayoutParams(maxW,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+            dialog.setContentView(root);
+
+            Window w = dialog.getWindow();
+            if (w != null) {
+                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                w.setDimAmount(0.6f);
+                w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                w.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT);
+            }
+        }
+
+        LinearLayout body() { return body; }
+
+        /** 列表行：标题 + 可选副标题 + 选中圆点（选中行 12% ACCENT 底） */
+        Sheet row(String title, String sub, boolean checked, Runnable onClick) {
+            LinearLayout r = new LinearLayout(MainActivity.this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            r.setBackground(checked ? round(0x1F4F7CFF, 14, 0) : ripple(DIM, 14, 0));
+            r.setPadding(dp(14), dp(12), dp(12), dp(12));
+
+            LinearLayout txt = new LinearLayout(MainActivity.this);
+            txt.setOrientation(LinearLayout.VERTICAL);
+            TextView n = new TextView(MainActivity.this);
+            n.setText(title);
+            n.setTextColor(TXT);
+            n.setTextSize(15);
+            txt.addView(n);
+            if (sub != null) {
+                TextView sd = new TextView(MainActivity.this);
+                sd.setText(sub);
+                sd.setTextColor(SUB);
+                sd.setTextSize(12);
+                txt.addView(sd, lp(-2, -2, 0, dp(3), 0, 0));
+            }
+            r.addView(txt, new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            if (checked) {
+                TextView dot = new TextView(MainActivity.this);
+                dot.setText("●");
+                dot.setTextColor(ACCENT);
+                dot.setTextSize(12);
+                r.addView(dot);
+            }
+            r.setOnClickListener(v -> {
+                dialog.dismiss();
+                if (onClick != null) onClick.run();
+            });
+            body.addView(r, lp(-1, -2, 0, 0, 0, dp(8)));
+            return this;
+        }
+
+        /** 输入框：SURFACE2 底 12dp 圆角 48dp 高 */
+        Sheet field(EditText et) {
+            et.setBackground(round(SURFACE2, 12, 0));
+            et.setTextColor(TXT);
+            et.setHintTextColor(SUB);
+            et.setTextSize(15);
+            et.setSingleLine(true);
+            et.setPadding(dp(12), 0, dp(12), 0);
+            body.addView(et, lp(-1, dp(48), 0, 0, 0, dp(10)));
+            return this;
+        }
+
+        /** 说明文字（多行） */
+        Sheet text(String s) {
+            TextView t = new TextView(MainActivity.this);
+            t.setText(s);
+            t.setTextColor(SUB);
+            t.setTextSize(13);
+            t.setLineSpacing(dp(3), 1f);
+            body.addView(t, lp(-1, -2, 0, dp(2), 0, dp(6)));
+            return this;
+        }
+
+        /** 底部动作：主操作=ACCENT 渐变胶囊白字；其余传 SUB 或红色 */
+        Sheet action(String label, boolean primary, int color, Runnable onClick) {
+            TextView b = new TextView(MainActivity.this);
+            b.setText(label);
+            b.setTextSize(14);
+            b.setGravity(Gravity.CENTER);
+            if (primary) {
+                b.setTextColor(Color.WHITE);
+                b.setTypeface(null, android.graphics.Typeface.BOLD);
+                b.setBackground(rippleGrad(999));
+                b.setPadding(dp(20), 0, dp(20), 0);
+            } else {
+                b.setTextColor(color);
+                b.setPadding(dp(14), 0, dp(14), 0);
+            }
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+            p.leftMargin = dp(4);
+            b.setLayoutParams(p);
+            b.setOnClickListener(v -> {
+                dialog.dismiss();
+                if (onClick != null) onClick.run();
+            });
+            actions.addView(b);
+            return this;
+        }
+
+        Sheet action(String label, boolean primary, int color) {
+            return action(label, primary, color, null);
+        }
+
+        Sheet onDismiss(Runnable r) {
+            dialog.setOnDismissListener(d -> r.run());
+            return this;
+        }
+
+        void show() { dialog.show(); }
+
+        void dismiss() { dialog.dismiss(); }
+    }
+
+    // ---------------- 模式切换（SPEC-013：只有直连 / 蓝牙） ----------------
+
+    /** 模式选择入口：lan=直连（当前设备未配对则弹配对框），bt=蓝牙 HID */
+    private void selectMode(String m) {
+        if (m.equals("lan")) {
+            if (!tokenOf(curHost()).isEmpty()) enableLan();
+            else showLanDialog();
+        } else {
+            startBt();
+        }
+    }
+
+    /** 当前设备已配对：直接启用直连模式，控制目标 = 当前设备 */
+    private void enableLan() {
+        if (btMode && bt != null) bt.disconnect();
+        lan = new LanClient(curHost(), LanClient.DEFAULT_PORT, tokenOf(curHost()));
+        lanMode = true;
+        btMode = false;
+        saveMode(curHost(), "lan");
+        updateModeUi();
+        setStatus(getString(R.string.lan_paired_status, curHost()), true);
+        ensureApps();
+    }
+
+    /** SPEC-015：切换/启动设备时，按该设备上次成功使用的方式恢复连接 */
+    private void applyDeviceMode() {
+        String mode = modeOf(curHost());
+        if (btMode && bt != null) bt.disconnect();
+        lan = null;
+        lanMode = false;
+        btMode = false;
+        updateModeUi();
+        if ("bt".equals(mode)) {
+            startBt();
+            return;
+        }
+        if (!tokenOf(curHost()).isEmpty()) enableLan();
+        else setStatus(getString(R.string.lan_not_paired), false);
+    }
+
+    // ---------------- 模式高亮（模式按钮常显，SPEC-013 FR-13-7） ----------------
+
+    /** 按当前模式高亮两段选择器 */
+    private void updateModeUi() {
+        if (modeLan == null) return;
+        applySeg(modeLan, lanMode);
+        applySeg(modeBt, btMode);
+    }
+
+    private void applySeg(TextView t, boolean on) {
+        t.setBackground(on ? rippleGrad(999) : null);
+        t.setTextColor(on ? Color.WHITE : SUB);
     }
 
     // ---------------- 遥控逻辑 ----------------
@@ -366,236 +1010,204 @@ public class MainActivity extends Activity {
             btPress(code);
             return;
         }
-        shell("input keyevent " + code);
+        setStatus(getString(R.string.select_mode_first), false);
     }
 
-    /** ADB keycode → 蓝牙 HID usage 映射 */
+    /** 手机 keycode → 蓝牙 HID usage 映射 */
     private void btPress(int code) {
         if (bt == null || !bt.isReady()) {
-            setStatus("蓝牙未就绪，点顶部「蓝牙」重连", false);
+            setStatus(getString(R.string.bt_not_ready), false);
             return;
         }
         switch (code) {
-            case 19: bt.sendKey(BtHid.K_UP); break;
-            case 20: bt.sendKey(BtHid.K_DOWN); break;
-            case 21: bt.sendKey(BtHid.K_LEFT); break;
-            case 22: bt.sendKey(BtHid.K_RIGHT); break;
-            case 23: bt.sendKey(BtHid.K_ENTER); break;
-            case 4: bt.sendKey(BtHid.K_ESC); break;
-            case 3: bt.sendKey(BtHid.K_HOME); break;
-            case 82: bt.sendKey(0x65); break;
-            case 24: bt.sendConsumer(BtHid.C_VOL_UP); break;
-            case 25: bt.sendConsumer(BtHid.C_VOL_DOWN); break;
-            case 164: bt.sendConsumer(BtHid.C_MUTE); break;
-            case 26: bt.sendConsumer(0x30); break;
+            case 19: btSend(bt.sendKey(BtHid.K_UP)); break;
+            case 20: btSend(bt.sendKey(BtHid.K_DOWN)); break;
+            case 21: btSend(bt.sendKey(BtHid.K_LEFT)); break;
+            case 22: btSend(bt.sendKey(BtHid.K_RIGHT)); break;
+            case 23: btSend(bt.sendKey(BtHid.K_ENTER)); break;
+            // SPEC-005：Home/Back 走消费者控制，手机与电视盒子都识别为系统动作
+            case 4: btSend(bt.sendConsumer(BtHid.C_BACK)); break;
+            case 3: btSend(bt.sendConsumer(BtHid.C_HOME)); break;
+            case 82: btSend(bt.sendKey(0x65)); break;
+            case 24: btSend(bt.sendConsumer(BtHid.C_VOL_UP)); break;
+            case 25: btSend(bt.sendConsumer(BtHid.C_VOL_DOWN)); break;
+            case 164: btSend(bt.sendConsumer(BtHid.C_MUTE)); break;
+            case 26: btSend(bt.sendConsumer(0x30)); break;
             default: break;
         }
     }
 
-    private void shell(final String cmd) {
-        worker.submit(() -> {
-            try {
-                if (!adb.isConnected()) adb.connect(curHost(), curPort(), 4000);
-                adb.exec(cmd, 6000);
-                setStatus("已连接 " + curHost(), true);
-            } catch (Exception e) {
-                setStatus("未连接：" + shortMsg(e), false);
-            }
-        });
-    }
-
-    private void connectAsync() {
-        worker.submit(() -> {
-            try {
-                adb.connect(curHost(), curPort(), 5000);
-                String model = adb.exec("getprop ro.product.model", 4000).trim();
-                setStatus("已连接 · " + model, true);
-            } catch (Exception e) {
-                setStatus("连接失败：" + shortMsg(e), false);
-            }
-        });
-    }
-
-    private String shortMsg(Exception e) {
-        String m = e.getMessage();
-        if (m == null) m = e.getClass().getSimpleName();
-        return m.length() > 26 ? m.substring(0, 26) : m;
+    /** 蓝牙发送失败时明确提示，避免按键看起来没反应 */
+    private void btSend(boolean ok) {
+        if (!ok) setStatus(getString(R.string.bt_send_failed), false);
     }
 
     private void setStatus(final String s, final boolean ok) {
         runOnUiThread(() -> {
             status.setText(s);
-            status.setTextColor(ok ? 0xFF3FB950 : 0xFFF85149);
+            status.setTextColor(ok ? GREEN : RED);
+            if (dotBg != null) dotBg.setColor(ok ? GREEN : RED);
         });
     }
 
     // ---------------- 设备管理 ----------------
 
     private void showDevicePicker() {
-        String[] names = new String[devices.size()];
+        Sheet sheet = new Sheet(getString(R.string.device_picker_title), null);
         for (int i = 0; i < devices.size(); i++) {
-            String[] d = devices.get(i);
-            names[i] = (i == cur ? "● " : "○ ") + d[0] + "   (" + d[1] + ":" + d[2] + ")";
+            final int idx = i;
+            final String[] d = devices.get(i);
+            sheet.row(d[0], d[1], i == cur, () -> switchTo(idx));
         }
-        new AlertDialog.Builder(this)
-                .setTitle("选择设备（长按列表项可删除）")
-                .setItems(names, (d, which) -> switchTo(which))
-                .setNeutralButton("删除当前", (d, w) -> removeCurrent())
-                .setNegativeButton("取消", null)
+        sheet.action(getString(R.string.delete_current), false, RED,
+                        () -> removeCurrent())
+                .action(getString(R.string.cancel), false, SUB)
                 .show();
     }
 
     private void switchTo(int idx) {
         cur = idx;
         devName.setText(devices.get(cur)[0] + "  ▾");
-        setStatus("正在切换…", true);
         saveDevices();
-        adb.close();
-        connectAsync();
+        // SPEC-015：连接方式与蓝牙目标跟随设备，恢复该设备上次成功使用的方式
+        applyDeviceMode();
+    }
+
+    /** SPEC-011：定位该 IP 的设备；不在列表则新增（名称取 IP），并切换为当前设备 */
+    private void focusDevice(String ip) {
+        for (int i = 0; i < devices.size(); i++) {
+            if (devices.get(i)[1].equals(ip)) {
+                cur = i;
+                devName.setText(devices.get(cur)[0] + "  ▾");
+                saveDevices();
+                        return;
+            }
+        }
+        devices.add(new String[]{ip, ip});
+        cur = devices.size() - 1;
+        devName.setText(devices.get(cur)[0] + "  ▾");
+        saveDevices();
     }
 
     private void removeCurrent() {
         if (devices.size() <= 1) {
-            Toast.makeText(this, "至少保留一个设备", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, getString(R.string.keep_one_device), Toast.LENGTH_SHORT).show();
             return;
         }
+        String removed = devices.get(cur)[1];
+        clearDevicePrefs(removed);
         devices.remove(cur);
         cur = 0;
         devName.setText(devices.get(cur)[0] + "  ▾");
         saveDevices();
-        adb.close();
-        connectAsync();
+        applyDeviceMode();
     }
 
     private void showAddDialog() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(8), dp(20), dp(8));
+        final EditText name = new EditText(this);
+        name.setHint(getString(R.string.add_name_hint));
 
-        EditText name = new EditText(this);
-        name.setHint("设备名称（随便起）");
-        name.setTextColor(TXT);
-        box.addView(name);
-
-        EditText addr = new EditText(this);
-        addr.setHint("IP:端口，例如 192.168.3.125:5555");
-        addr.setTextColor(TXT);
+        final EditText addr = new EditText(this);
+        addr.setHint(getString(R.string.add_addr_hint));
         addr.setInputType(InputType.TYPE_CLASS_TEXT);
-        box.addView(addr);
 
-        new AlertDialog.Builder(this)
-                .setTitle("手动添加设备")
-                .setView(box)
-                .setPositiveButton("添加并连接", (d, w) -> {
-                    String a = addr.getText().toString().trim();
-                    if (a.isEmpty()) return;
-                    String[] parts = a.split(":");
-                    String h = parts[0];
-                    int p = 5555;
-                    if (parts.length > 1) {
-                        try { p = Integer.parseInt(parts[1]); } catch (Exception ignored) {}
-                    }
+        new Sheet(getString(R.string.add_title), null)
+                .field(name)
+                .field(addr)
+                .action(getString(R.string.cancel), false, SUB)
+                .action(getString(R.string.add_positive), true, SUB, () -> {
+                    String h = addr.getText().toString().trim();
+                    if (h.isEmpty()) return;
                     String n = name.getText().toString().trim();
                     if (n.isEmpty()) n = h;
-                    addAndConnect(n, h, p);
+                    addAndConnect(n, h);
                 })
-                .setNegativeButton("取消", null)
                 .show();
     }
 
-    private void addAndConnect(String name, String ip, int port) {
+    private void addAndConnect(String name, String ip) {
         for (int i = 0; i < devices.size(); i++) {
-            String[] d = devices.get(i);
-            if (d[1].equals(ip) && d[2].equals(String.valueOf(port))) {
+            if (devices.get(i)[1].equals(ip)) {
                 switchTo(i);
-                return;
+                break;
             }
         }
-        devices.add(new String[]{name, ip, String.valueOf(port)});
-        cur = devices.size() - 1;
-        devName.setText(devices.get(cur)[0] + "  ▾");
-        saveDevices();
-        adb.close();
-        connectAsync();
+        if (cur < 0 || !devices.get(cur)[1].equals(ip)) {
+            devices.add(new String[]{name, ip});
+            cur = devices.size() - 1;
+            devName.setText(devices.get(cur)[0] + "  ▾");
+            saveDevices();
+        }
+        if (!tokenOf(ip).isEmpty()) enableLan();
+        else showLanDialog();
     }
 
     // ---------------- 局域网直连（盒子端 App，不需开发者选项） ----------------
 
     private void showLanDialog() {
-        // 已经配对过：直接进入直连模式，不再要求输入配对码
-        if (!lanHost.isEmpty() && !lanToken.isEmpty()) {
-            lan = new LanClient(lanHost, LanClient.DEFAULT_PORT, lanToken);
-            lanMode = true;
-            btMode = false;
-            modeBtn.setText("直连");
-            setStatus("直连 · " + lanHost + "（已配对）", true);
+        // 当前设备已经配对过：直接进入直连模式，不再要求输入配对码
+        if (!tokenOf(curHost()).isEmpty()) {
+            enableLan();
             return;
         }
 
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(8), dp(20), dp(8));
-
         final EditText ip = new EditText(this);
-        ip.setHint("盒子 IP，例如 192.168.3.125");
-        ip.setText(lanHost.isEmpty() ? "192.168.3.125" : lanHost);
-        ip.setTextColor(TXT);
-        box.addView(ip);
+        ip.setHint(getString(R.string.lan_ip_hint));
+        ip.setText(curHost());
 
         final EditText code = new EditText(this);
-        code.setHint("6 位配对码（电视屏幕上显示的）");
+        code.setHint(getString(R.string.lan_code_hint));
         code.setInputType(InputType.TYPE_CLASS_NUMBER);
-        code.setTextColor(TXT);
-        box.addView(code);
 
-        new AlertDialog.Builder(this)
-                .setTitle("局域网直连")
-                .setMessage("盒子端装好「TV遥控服务」后，电视上会显示 6 位配对码。\n"
-                        + "配对一次长期有效，全程不需要开发者选项。")
-                .setView(box)
-                .setPositiveButton("配对并连接", (d, w) ->
+        new Sheet(getString(R.string.lan_title), getString(R.string.lan_msg))
+                .field(ip)
+                .field(code)
+                .action(getString(R.string.lan_discover), false, SUB, () -> doDiscover())
+                .action(getString(R.string.cancel), false, SUB)
+                .action(getString(R.string.lan_pair), true, SUB, () ->
                         doPair(ip.getText().toString().trim(), code.getText().toString().trim()))
-                .setNeutralButton("自动发现", (d, w) -> doDiscover())
-                .setNegativeButton("取消", null)
                 .show();
     }
 
     private void doPair(final String h, final String c) {
         if (h.isEmpty() || c.isEmpty()) {
-            setStatus("IP 和配对码都要填", false);
+            setStatus(getString(R.string.ip_code_required), false);
             return;
         }
-        setStatus("正在配对 " + h + " …", true);
+        setStatus(getString(R.string.pairing, h), true);
         worker.submit(() -> {
             try {
                 String tok = LanClient.pair(h, LanClient.DEFAULT_PORT, c, 5000);
-                lanHost = h;
-                lanToken = tok;
-                lan = new LanClient(h, LanClient.DEFAULT_PORT, tok);
-                sp.edit().putString("lanHost", h).putString("lanToken", tok).apply();
-                lanMode = true;
-                btMode = false;
+                saveToken(h, tok);
                 runOnUiThread(() -> {
-                    modeBtn.setText("直连");
-                    setStatus("已配对 · " + h, true);
+                    // 配对哪台就控制哪台：把该 IP 定位/新增为当前设备，直连立即可用
+                    focusDevice(h);
+                    if (btMode && bt != null) bt.disconnect();
+                    lan = new LanClient(h, LanClient.DEFAULT_PORT, tok);
+                    lanMode = true;
+                    btMode = false;
+                    saveMode(h, "lan");
+                    updateModeUi();
+                    setStatus(getString(R.string.paired, h), true);
+                    ensureApps();
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> setStatus("配对失败：" + shortMsg(e), false));
+                runOnUiThread(() -> setStatus(Errors.friendly(this, e), false));
             }
         });
     }
 
     private void doDiscover() {
-        setStatus("正在监听盒子广播…", true);
+        setStatus(getString(R.string.discovering), true);
         worker.submit(() -> {
             final String ip = LanClient.discover(4500);
             runOnUiThread(() -> {
                 if (ip != null) {
-                    lanHost = ip;
-                    setStatus("发现盒子 " + ip + "，请填配对码", true);
+                    focusDevice(ip);
+                    setStatus(getString(R.string.discovered, ip), true);
                     showLanDialog();
                 } else {
-                    setStatus("没发现盒子，确认盒子端服务在运行", false);
+                    setStatus(getString(R.string.discover_none), false);
                 }
             });
         });
@@ -603,15 +1215,15 @@ public class MainActivity extends Activity {
 
     private void lanPress(final int code) {
         if (lan == null) {
-            setStatus("还没配对，点顶部「直连」", false);
+            setStatus(getString(R.string.lan_not_paired), false);
             return;
         }
         worker.submit(() -> {
             try {
                 lan.key(code);
-                setStatus("直连 · " + lanHost, true);
+                setStatus(getString(R.string.lan_status, curHost()), true);
             } catch (Exception e) {
-                setStatus("直连失败：" + shortMsg(e), false);
+                setStatus(Errors.friendly(this, e), false);
             }
         });
     }
@@ -619,57 +1231,64 @@ public class MainActivity extends Activity {
     private void doText(final String t) {
         if (lanMode && lan != null) {
             worker.submit(() -> {
-                try { lan.text(t); } catch (Exception e) { setStatus("直连失败：" + shortMsg(e), false); }
+                try {
+                    lan.text(t);
+                    setStatus(getString(R.string.lan_status, curHost()), true);
+                } catch (Exception e) {
+                    setStatus(Errors.friendly(this, e), false);
+                }
             });
         } else {
-            shell("input text \"" + t.replace(" ", "%s").replace("\"", "") + "\"");
+            // SPEC-013 FR-13-6：文字注入只有直连支持
+            setStatus(getString(R.string.direct_only), false);
         }
     }
 
     private void doApp(final String pkg) {
         if (lanMode && lan != null) {
             worker.submit(() -> {
-                try { lan.launch(pkg); } catch (Exception e) { setStatus("直连失败：" + shortMsg(e), false); }
+                try {
+                    lan.launch(pkg);
+                    setStatus(getString(R.string.lan_status, curHost()), true);
+                } catch (Exception e) {
+                    setStatus(Errors.friendly(this, e), false);
+                }
             });
         } else {
-            shell("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
+            // SPEC-013 FR-13-6：远程启动应用只有直连支持
+            setStatus(getString(R.string.direct_only), false);
         }
     }
 
     // ---------------- 蓝牙模式 ----------------
 
-    private void toggleMode() {
-        if (!btMode) {
-            startBt();
-        } else {
-            btMode = false;
-            modeBtn.setText("ADB");
-            setStatus("已切换回 ADB 模式", true);
-            connectAsync();
-        }
-    }
-
+    /** 进入蓝牙模式：注册 HID；已记住盒子则直接重连，否则弹设备选择（SPEC-005 FR-5-7/5-8） */
     private void startBt() {
-        setStatus("正在初始化蓝牙 HID…", true);
-        bt = new BtHid(this);
-        bt.start(new BtHid.StateListener() {
+        // Android 8.x 没有 HID Device API：点击时明确告知，模式按钮仍常显
+        if (Build.VERSION.SDK_INT < 28) {
+            setStatus(getString(R.string.bt_not_supported), false);
+            new Sheet(getString(R.string.bt_unsupported_title),
+                    getString(R.string.bt_unsupported_msg, getString(R.string.bt_not_supported)))
+                    .action(getString(R.string.ok_got_it), true, SUB)
+                    .show();
+            return;
+        }
+        if (bt == null) bt = new BtHid(this);
+        if (btListener == null) btListener = new BtHid.StateListener() {
             @Override
             public void onSupport(final boolean ok, final String reason) {
                 runOnUiThread(() -> {
                     if (!ok) {
-                        bt = null;
-                        setStatus("蓝牙不可用：" + reason, false);
-                        new AlertDialog.Builder(MainActivity.this)
-                                .setTitle("这台手机不能做蓝牙遥控器")
-                                .setMessage(reason + "\n\n两种选择：\n"
-                                        + "· 继续用 ADB 模式（需要开着无线调试）\n"
-                                        + "· 买个 2.4G 飞鼠遥控器（30 元左右，插上即用）")
-                                .setPositiveButton("知道了", null)
+                        setStatus(getString(R.string.bt_unavailable, reason), false);
+                        new Sheet(getString(R.string.bt_unsupported_title),
+                                getString(R.string.bt_unsupported_msg, reason))
+                                .action(getString(R.string.ok_got_it), true, SUB)
                                 .show();
                         return;
                     }
+                    lanMode = false;
                     btMode = true;
-                    modeBtn.setText("蓝牙");
+                    updateModeUi();
                     showBtDevicePicker();
                 });
             }
@@ -677,151 +1296,182 @@ public class MainActivity extends Activity {
             @Override
             public void onRegistered(final boolean ok) {
                 runOnUiThread(() -> {
-                    setStatus(ok ? "蓝牙 HID 已注册" : "蓝牙注册失败", ok);
+                    setStatus(getString(ok ? R.string.bt_registered : R.string.bt_register_failed), ok);
                     if (ok) {
+                        lanMode = false;
                         btMode = true;
-                        modeBtn.setText("蓝牙");
-                        showBtDevicePicker();
+                        updateModeUi();
+                        connectSavedBtOrPick();
                     }
+                    // 注册被系统注销（退后台）不算手机不支持，重新点蓝牙即可再注册
                 });
             }
 
             @Override
             public void onConnectionChanged(final BluetoothDevice d, final boolean connected) {
                 runOnUiThread(() -> {
-                    String n = (d != null && d.getName() != null) ? d.getName() : "设备";
-                    setStatus(connected ? "蓝牙已连接 · " + n : "蓝牙已断开", connected);
-                    if (!connected) btMode = false;
+                    String n = (d != null && d.getName() != null)
+                            ? d.getName() : getString(R.string.bt_device);
+                    if (connected && d != null) {
+                        lanMode = false;
+                        btMode = true;
+                        updateModeUi();
+                        // SPEC-015：连接成功才记录，避免失败覆盖该设备上次可用的方式
+                        saveMode(curHost(), "bt");
+                        saveBtAddr(curHost(), d.getAddress());
+                        setStatus(getString(R.string.bt_connected, n), true);
+                        return;
+                    }
+                    btMode = false;
+                    updateModeUi();
+                    // 切设备时主动断开旧目标，不覆盖新设备的直连状态文案
+                    if (!lanMode) setStatus(getString(R.string.bt_disconnected, n), false);
                 });
             }
-        });
+        };
+        if (bt.isReady()) {
+            // 已注册：切换设备时直接切到该设备的蓝牙目标，不重复注册
+            lanMode = false;
+            btMode = true;
+            updateModeUi();
+            connectSavedBtOrPick();
+            return;
+        }
+        setStatus(getString(R.string.bt_initializing), true);
+        bt.start(btListener);
+    }
+
+    /** 注册成功后优先连接该设备记住的蓝牙目标；没有记录则弹选择框 */
+    private void connectSavedBtOrPick() {
+        String addr = btAddrOf(curHost());
+        if (!addr.isEmpty() && bt != null) {
+            Set<BluetoothDevice> bonded = bt.bondedDevices();
+            if (bonded != null) {
+                for (BluetoothDevice d : bonded) {
+                    if (d.getAddress().equals(addr)) {
+                        bt.connect(d);
+                        setStatus(getString(R.string.bt_connecting, d.getName() == null
+                                ? addr : d.getName()), true);
+                        return;
+                    }
+                }
+            }
+        }
+        showBtDevicePicker();
     }
 
     private void showBtDevicePicker() {
         Set<BluetoothDevice> bonded = bt != null ? bt.bondedDevices() : null;
         if (bonded == null || bonded.isEmpty()) {
-            setStatus("没有已配对的蓝牙设备", false);
-            new AlertDialog.Builder(this)
-                    .setTitle("还没有配对设备")
-                    .setMessage("请先在系统「设置 → 蓝牙」里和盒子配对，然后再回来点「蓝牙」。")
-                    .setPositiveButton("去蓝牙设置", (d, w) -> {
+            setStatus(getString(R.string.bt_none_found), false);
+            new Sheet(getString(R.string.bt_none_title), getString(R.string.bt_none_msg))
+                    .action(getString(R.string.bt_discoverable), false, ACCENT,
+                            this::requestDiscoverable)
+                    .action(getString(R.string.bt_open_settings), true, SUB, () -> {
                         try {
                             startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
                         } catch (Exception ignored) {}
                     })
-                    .setNegativeButton("取消", null)
                     .show();
             return;
         }
         final List<BluetoothDevice> list = new ArrayList<>(bonded);
-        String[] names = new String[list.size()];
+        Sheet sheet = new Sheet(getString(R.string.bt_pick_title), null);
         for (int i = 0; i < list.size(); i++) {
+            final int idx = i;
             BluetoothDevice d = list.get(i);
             String n = d.getName();
-            names[i] = (n == null ? d.getAddress() : n) + "\n" + d.getAddress();
+            sheet.row(n == null ? d.getAddress() : n, d.getAddress(), false, () -> {
+                // SPEC-015：蓝牙目标记录到当前设备，切回该设备时自动连接
+                saveBtAddr(curHost(), list.get(idx).getAddress());
+                bt.connect(list.get(idx));
+                setStatus(getString(R.string.bt_connecting, n == null ? d.getAddress() : n), true);
+            });
         }
-        new AlertDialog.Builder(this)
-                .setTitle("选择已配对的盒子")
-                .setItems(names, (dd, which) -> bt.connect(list.get(which)))
-                .setNegativeButton("取消", null)
-                .show();
+        sheet.action(getString(R.string.cancel), false, SUB).show();
     }
 
-    // ---------------- mDNS 扫描 ----------------
-
-    /** 每个服务类型要独立的 listener，否则报 listener already in use */
-    private NsdManager.DiscoveryListener makeDiscovery(final List<String[]> hits, final Set<String> seen) {
-        return new NsdManager.DiscoveryListener() {
-            public void onDiscoveryStarted(String t) {}
-            public void onDiscoveryStopped(String t) {}
-            public void onStopDiscoveryFailed(String t, int e) {}
-            public void onServiceLost(NsdServiceInfo i) {}
-
-            public void onStartDiscoveryFailed(String t, int err) {
-                setStatus("扫描启动失败(" + err + ")", false);
-            }
-
-            public void onServiceFound(NsdServiceInfo info) {
-                try {
-                    nsd.resolveService(info, new NsdManager.ResolveListener() {
-                        public void onResolveFailed(NsdServiceInfo i, int e) {}
-                        public void onServiceResolved(NsdServiceInfo i) {
-                            String ip = i.getHost() != null ? i.getHost().getHostAddress() : "?";
-                            String key = ip + ":" + i.getPort();
-                            if (seen.add(key)) {
-                                hits.add(new String[]{
-                                        i.getServiceName()
-                                                .replace("_adb-tls-connect._tcp.", "")
-                                                .replace("_adb._tcp.", ""),
-                                        ip, String.valueOf(i.getPort())});
-                            }
-                        }
-                    });
-                } catch (Exception ignored) {}
-            }
-        };
-    }
-
-    private void startScan() {
-        setStatus("正在扫描局域网…", true);
-        nsd = (NsdManager) getSystemService(Context.NSD_SERVICE);
-        final Set<String> seen = new LinkedHashSet<>();
-        final List<String[]> hits = new ArrayList<>();
-
-        discovery = makeDiscovery(hits, seen);
-        discovery2 = makeDiscovery(hits, seen);
-
+    /** SPEC-005 FR-5-9：让盒子能搜到本机，以 HID 设备身份完成配对 */
+    private void requestDiscoverable() {
         try {
-            nsd.discoverServices("_adb-tls-connect._tcp", NsdManager.PROTOCOL_DNS_SD, discovery);
-            nsd.discoverServices("_adb._tcp", NsdManager.PROTOCOL_DNS_SD, discovery2);
+            Intent i = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+            i.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120);
+            startActivity(i);
+            Toast.makeText(this, getString(R.string.bt_discoverable_hint),
+                    Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            setStatus("扫描失败：" + shortMsg(e), false);
-            return;
+            setStatus(Errors.friendly(this, e), false);
         }
-
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            try { nsd.stopServiceDiscovery(discovery); } catch (Exception ignored) {}
-            try { nsd.stopServiceDiscovery(discovery2); } catch (Exception ignored) {}
-            showScanResult(hits);
-        }, 9000);
     }
 
-    private void showScanResult(final List<String[]> hits) {
-        if (hits.isEmpty()) {
-            setStatus("扫描完成：未发现设备", false);
-            new AlertDialog.Builder(this)
-                    .setTitle("没有扫描到设备")
-                    .setMessage("可能原因：\n"
-                            + "· 设备的「无线调试」没打开（ADB 方案必须开）\n"
-                            + "· 手机和设备不在同一 WiFi\n"
-                            + "· 路由器开启了 AP 隔离\n\n"
-                            + "可以点右上角「添加」手动填 IP:端口。")
-                    .setPositiveButton("知道了", null)
-                    .show();
-            return;
-        }
-        setStatus("扫描到 " + hits.size() + " 台设备", true);
-        String[] items = new String[hits.size()];
-        for (int i = 0; i < hits.size(); i++) {
-            String[] h = hits.get(i);
-            items[i] = h[0] + "\n" + h[1] + ":" + h[2];
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("扫描到 " + hits.size() + " 台（点击添加）")
-                .setItems(items, (d, which) -> {
-                    String[] h = hits.get(which);
-                    addAndConnect(h[0], h[1], Integer.parseInt(h[2]));
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    // ---------------- UDP 扫描（SPEC-013 FR-13-5：盒子端 8898 广播） ----------------
+
+    private boolean scanning = false;
+
+    /** 点「扫描」立即弹窗：状态行 + 结果列表同框；扫描完成后一次列出全部盒子 */
+    private void startScan() {
+        if (scanning) return;
+        scanning = true;
+
+        final Sheet sheet = new Sheet(getString(R.string.scan_title), null);
+        final TextView stv = new TextView(this);
+        stv.setText(getString(R.string.scanning));
+        stv.setTextColor(SUB);
+        stv.setTextSize(13);
+        sheet.body().addView(stv, lp(-1, -2, 0, dp(2), 0, dp(12)));
+
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        sheet.body().addView(list, lp(-1, -2, 0, 0, 0, 0));
+        sheet.action(getString(R.string.cancel), false, SUB);
+        sheet.onDismiss(() -> scanning = false).show();
+
+        worker.submit(() -> {
+            final List<String[]> hits = LanClient.discoverAll(4000);
+            runOnUiThread(() -> {
+                if (!scanning) return;
+                stv.setText(hits.isEmpty()
+                        ? getString(R.string.scan_done_none)
+                        : getString(R.string.scan_found, hits.size()));
+                list.removeAllViews();
+                for (final String[] h : hits) {
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.VERTICAL);
+                    row.setBackground(ripple(DIM, 14, 0));
+                    row.setPadding(dp(14), dp(12), dp(14), dp(12));
+                    TextView name = new TextView(this);
+                    name.setText(h[0]);
+                    name.setTextColor(TXT);
+                    name.setTextSize(15);
+                    row.addView(name);
+                    TextView addr = new TextView(this);
+                    addr.setText(getString(R.string.scan_row_tap, h[1]));
+                    addr.setTextColor(SUB);
+                    addr.setTextSize(12);
+                    row.addView(addr, lp(-2, -2, 0, dp(3), 0, 0));
+                    row.setOnClickListener(v -> {
+                        sheet.dismiss();
+                        addAndConnect(h[0], h[1]);
+                    });
+                    list.addView(row, lp(-1, -2, 0, 0, 0, dp(8)));
+                }
+                if (hits.isEmpty()) {
+                    // 空结果时补一行可操作的原因说明（SPEC-008 错误文案要求）
+                    TextView hint = new TextView(this);
+                    hint.setText(getString(R.string.scan_none_msg));
+                    hint.setTextColor(SUB);
+                    hint.setTextSize(12);
+                    hint.setLineSpacing(dp(3), 1f);
+                    sheet.body().addView(hint, lp(-1, -2, 0, 0, 0, dp(4)));
+                }
+            });
+        });
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        try { if (nsd != null && discovery != null) nsd.stopServiceDiscovery(discovery); } catch (Exception ignored) {}
         if (bt != null) bt.stop();
-        if (adb != null) adb.close();
         worker.shutdownNow();
     }
 }

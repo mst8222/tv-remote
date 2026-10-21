@@ -63,6 +63,9 @@ public class BtHid {
 
     /** 消费者控制 Usage */
     public static final int C_VOL_UP = 0xE9, C_VOL_DOWN = 0xEA, C_MUTE = 0xE2;
+    /** 消费者控制 AC Home / AC Back：手机类受控端识别为系统主页/返回，
+     *  键盘页的 Home(0x4A)/Esc(0x29) 在手机上只会当光标移动（SPEC-005） */
+    public static final int C_HOME = 0x0223, C_BACK = 0x0224;
 
     public interface StateListener {
         void onSupport(boolean supported, String reason);
@@ -138,10 +141,15 @@ public class BtHid {
 
             @Override
             public void onConnectionStateChanged(BluetoothDevice device, int state) {
-                boolean on = state == BluetoothProfile.STATE_CONNECTED;
                 Log.i(TAG, "onConnectionStateChanged " + device + " -> " + state);
-                if (on) target = device;
-                if (listener != null) listener.onConnectionChanged(device, on);
+                // 只上报「已连接 / 已断开」，忽略 CONNECTING/DISCONNECTING 中间态，
+                // 否则连接过程中会被误判为断开（SPEC-005）
+                if (state == BluetoothProfile.STATE_CONNECTED) {
+                    target = device;
+                    if (listener != null) listener.onConnectionChanged(device, true);
+                } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                    if (listener != null) listener.onConnectionChanged(device, false);
+                }
             }
         };
 
@@ -165,8 +173,11 @@ public class BtHid {
     }
 
     public void disconnect() {
-        if (hid != null && target != null) {
-            try { hid.disconnect(target); } catch (Exception ignored) {}
+        // 先清空目标：切换设备后未连接新目标时，按键不得继续发往旧盒子（SPEC-015）
+        BluetoothDevice d = target;
+        target = null;
+        if (hid != null && d != null) {
+            try { hid.disconnect(d); } catch (Exception ignored) {}
         }
     }
 
@@ -175,36 +186,42 @@ public class BtHid {
         return adapter != null ? adapter.getBondedDevices() : null;
     }
 
-    /** 发送键盘按键（按下 + 自动抬起） */
-    public void sendKey(int usage) {
-        if (!isReady()) return;
+    /** 发送键盘按键（按下 + 自动抬起），返回是否成功入队 */
+    public boolean sendKey(int usage) {
+        if (!isReady()) return false;
         BluetoothDevice d = target;
-        if (d == null) return;
+        if (d == null) return false;
         final byte[] down = new byte[]{0, 0, (byte) usage, 0, 0, 0, 0, 0};
         final byte[] up = new byte[]{0, 0, 0, 0, 0, 0, 0, 0};
         try {
-            hid.sendReport(d, RID_KEY, down);
+            boolean ok = hid.sendReport(d, RID_KEY, down);
+            Log.i(TAG, "sendKey usage=0x" + Integer.toHexString(usage) + " ok=" + ok);
             main.postDelayed(() -> {
                 try { hid.sendReport(d, RID_KEY, up); } catch (Exception ignored) {}
             }, 35);
+            return ok;
         } catch (Exception e) {
             Log.e(TAG, "sendKey fail", e);
+            return false;
         }
     }
 
-    /** 发送消费者控制（音量等），同样按下 + 抬起 */
-    public void sendConsumer(int usage) {
+    /** 发送消费者控制（音量等），同样按下 + 抬起，返回是否成功入队 */
+    public boolean sendConsumer(int usage) {
         BluetoothDevice d = target;
-        if (!isReady() || d == null) return;
+        if (!isReady() || d == null) return false;
         final byte[] down = new byte[]{(byte) (usage & 0xFF), (byte) ((usage >> 8) & 0xFF)};
         final byte[] up = new byte[]{0, 0};
         try {
-            hid.sendReport(d, RID_CONSUMER, down);
+            boolean ok = hid.sendReport(d, RID_CONSUMER, down);
+            Log.i(TAG, "sendConsumer usage=0x" + Integer.toHexString(usage) + " ok=" + ok);
             main.postDelayed(() -> {
                 try { hid.sendReport(d, RID_CONSUMER, up); } catch (Exception ignored) {}
             }, 35);
+            return ok;
         } catch (Exception e) {
             Log.e(TAG, "sendConsumer fail", e);
+            return false;
         }
     }
 
@@ -218,5 +235,6 @@ public class BtHid {
         } catch (Exception ignored) {}
         hid = null;
         registered = false;
+        target = null;
     }
 }
