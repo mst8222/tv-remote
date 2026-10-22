@@ -483,8 +483,12 @@ Known limitations:
 
 ## License
 
-Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Personal study, research,
-testing, and other noncommercial use are permitted; **commercial use is prohibited**.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
+
+- **Noncommercial study and research**: free to use under the PolyForm Noncommercial terms.
+- **Any commercial use (internal company use, SaaS, resale)**: not permitted without a separate
+  commercial license from the author (mst8222@163.com).
+
 Redistributions and modified works must retain this license and copyright notice.
 
 ---
