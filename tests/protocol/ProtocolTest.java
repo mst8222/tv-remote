@@ -61,6 +61,11 @@ public class ProtocolTest {
         tc_list_ok();
         tc_list_wrong_token();
         tc_list_empty();
+        tc_icon_ok();
+        tc_icon_unknown_pkg();
+        tc_icon_missing_pkg();
+        tc_icon_wrong_token();
+        tc_icon_without_a11y();
         tc_key_unsupported();
         tc_keylong_ok();
         tc_keylong_unsupported();
@@ -302,6 +307,45 @@ public class ProtocolTest {
         String pkgs = lan.list();
         check("list_empty", pkgs.isEmpty(), "无第三方应用时 LIST 应返回 OK + 空串");
         lan.close();
+    }
+
+    /** SPEC-019：ICON 返回 PNG 的 Base64，客户端应解码出与盒端一致的字节 */
+    static void tc_icon_ok() throws Exception {
+        LanClient lan = newClient();
+        try {
+            byte[] png = lan.icon(box.iconPkg);
+            byte[] expect = java.util.Base64.getDecoder().decode(box.iconBase64);
+            check("icon_ok", java.util.Arrays.equals(expect, png),
+                    "ICON 返回的 Base64 解码后应与盒端 PNG 一致");
+        } finally {
+            lan.close();
+        }
+    }
+
+    static void tc_icon_unknown_pkg() throws Exception {
+        eq("icon_unknown_pkg", "ERR arg",
+                rawCmd("ICON " + box.token() + " com.not.exist"));
+    }
+
+    static void tc_icon_missing_pkg() throws Exception {
+        eq("icon_missing_pkg", "ERR arg", rawCmd("ICON " + box.token()));
+    }
+
+    static void tc_icon_wrong_token() throws Exception {
+        eq("icon_wrong_token", "ERR auth",
+                rawCmd("ICON deadbeef " + box.iconPkg));
+    }
+
+    /** SPEC-019：图标只读 PackageManager，不受无障碍开关影响（与 LIST 一致） */
+    static void tc_icon_without_a11y() throws Exception {
+        box.a11yEnabled = false;
+        try {
+            String resp = rawCmd("ICON " + box.token() + " " + box.iconPkg);
+            check("icon_without_a11y", resp.startsWith("OK "),
+                    "无障碍关闭时 ICON 仍应返回 OK，实际 " + resp);
+        } finally {
+            box.a11yEnabled = true;
+        }
     }
 
     /** SPEC-014：未知 keycode 明确返回 ERR cmd，不再假装执行成功 */

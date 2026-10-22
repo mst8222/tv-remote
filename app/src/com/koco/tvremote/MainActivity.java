@@ -10,6 +10,8 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.os.LocaleList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -33,6 +35,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -43,8 +46,10 @@ import java.nio.charset.StandardCharsets;
 import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -63,6 +68,8 @@ public class MainActivity extends Activity {
             GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A, POWER = 0xFFFF6B6B;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    /** SPEC-019：应用图标内存缓存，键为「设备 IP|包名」，避免切设备串图 */
+    private final Map<String, Bitmap> iconCache = new HashMap<>();
     private TextView status;
     private TextView devName;
     private SharedPreferences sp;
@@ -800,11 +807,14 @@ public class MainActivity extends Activity {
         return i + 3 < size ? dp(10) : 0;
     }
 
-    /** 应用按钮：圆形首字图标位 + 下方完整名称（手机桌面式两行以内） */
+    /** 应用按钮：图标位（首字占位 → 异步替换真实图标）+ 下方完整名称（手机桌面式两行以内） */
     private View appCell(String label, String pkg) {
         LinearLayout cell = new LinearLayout(this);
         cell.setOrientation(LinearLayout.VERTICAL);
         cell.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        FrameLayout slot = new FrameLayout(this);
+        slot.setOnClickListener(v -> doApp(pkg));
 
         TextView icon = new TextView(this);
         icon.setText(label.substring(0, 1));
@@ -812,8 +822,14 @@ public class MainActivity extends Activity {
         icon.setTextSize(17);
         icon.setGravity(Gravity.CENTER);
         icon.setBackground(ripple(SURFACE2, appIcon / 2f, 0));
-        icon.setOnClickListener(v -> doApp(pkg));
-        cell.addView(icon, lp(dp(appIcon), dp(appIcon), 0, 0, 0, dp(8)));
+        slot.addView(icon, lp(-1, -1, 0, 0, 0, 0));
+
+        ImageView img = new ImageView(this);
+        img.setVisibility(View.GONE);
+        slot.addView(img, lp(-1, -1, 0, 0, 0, 0));
+        loadIcon(pkg, slot, icon, img);
+
+        cell.addView(slot, lp(dp(appIcon), dp(appIcon), 0, 0, 0, dp(8)));
 
         TextView name = new TextView(this);
         name.setText(label);
@@ -824,6 +840,38 @@ public class MainActivity extends Activity {
         name.setGravity(Gravity.CENTER);
         cell.addView(name, lp(-1, -2, 0, 0, 0, 0));
         return cell;
+    }
+
+    /** SPEC-019：图标懒加载，命中缓存直接显示；失败保持首字占位，不影响点击与名称 */
+    private void loadIcon(final String pkg, final View slot, final TextView ph, final ImageView img) {
+        final String key = curHost() + "|" + pkg;
+        Bitmap cached = iconCache.get(key);
+        if (cached != null) {
+            img.setImageBitmap(cached);
+            img.setVisibility(View.VISIBLE);
+            ph.setVisibility(View.GONE);
+            return;
+        }
+        if (!lanMode || lan == null) return; // 蓝牙模式没有应用/图标通道
+        final LanClient client = lan;
+        worker.submit(() -> {
+            byte[] png;
+            try {
+                png = client.icon(pkg);
+            } catch (Exception e) {
+                Log.w("tvremote", "icon pull failed: " + pkg, e);
+                return;
+            }
+            final Bitmap bmp = BitmapFactory.decodeByteArray(png, 0, png.length);
+            if (bmp == null) return;
+            runOnUiThread(() -> {
+                iconCache.put(key, bmp);
+                if (slot.getParent() == null) return; // 卡片已重建，丢弃本次结果
+                img.setImageBitmap(bmp);
+                img.setVisibility(View.VISIBLE);
+                ph.setVisibility(View.GONE);
+            });
+        });
     }
 
     /** 异步拉取盒子已装包名（仅直连 LIST，SPEC-013 FR-13-6），成功写缓存并重建应用卡 */

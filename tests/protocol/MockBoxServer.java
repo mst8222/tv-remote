@@ -66,6 +66,11 @@ public class MockBoxServer implements AutoCloseable {
     /** SPEC-016：LIST 载荷「包名|base64(应用名)」逗号分隔；空串表示盒子无第三方应用 */
     public volatile String packages = "";
 
+    /** SPEC-019：ICON 只对 iconPkg 返回 iconBase64（1x1 PNG），其余包名返回 ERR arg */
+    public volatile String iconPkg = "com.example.app";
+    public volatile String iconBase64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
     private void serve() {
         try {
             while (!server.isClosed()) {
@@ -146,6 +151,11 @@ public class MockBoxServer implements AutoCloseable {
                 case "LIST":
                     // SPEC-016：返回可配置的「包名|base64(应用名)」载荷，与盒子端语义一致
                     return "OK " + packages;
+                case "ICON":
+                    // SPEC-019：按包名返回模拟图标，未知包与盒子端一致返回 ERR arg
+                    if (p.length < 3) return "ERR arg";
+                    if (iconBase64 == null || !p[2].trim().equals(iconPkg)) return "ERR arg";
+                    return "OK " + iconBase64;
                 default:
                     return "ERR cmd";
             }

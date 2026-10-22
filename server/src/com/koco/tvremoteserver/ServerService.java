@@ -9,6 +9,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
@@ -17,6 +20,7 @@ import android.util.Base64;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.DatagramPacket;
@@ -39,6 +43,7 @@ import java.util.concurrent.Executors;
  *   TEXT <token> <base64>     -> OK | ERR a11y | ERR exec
  *   APP <token> <包名>         -> OK | ERR exec
  *   LIST <token>              -> OK <包名|base64(应用名),逗号分隔>
+ *   ICON <token> <包名>        -> OK <base64(PNG)> | ERR arg | ERR exec（SPEC-019）
  *   PING                      -> PONG
  */
 public class ServerService extends Service {
@@ -206,6 +211,14 @@ public class ServerService extends Service {
                 case "LIST":
                     // SPEC-016：返回第三方应用「包名|base64(应用名)」，逗号分隔
                     return "OK " + listPackages();
+                case "ICON":
+                    // SPEC-019：按包名返回应用图标 PNG 的 Base64
+                    if (p.length < 3) return "ERR arg";
+                    {
+                        String icon = iconBase64(p[2].trim());
+                        if (icon == null) return "ERR arg";
+                        return "OK " + icon;
+                    }
                 default:
                     return "ERR cmd";
             }
@@ -229,6 +242,25 @@ public class ServerService extends Service {
                     label.getBytes(java.nio.charset.StandardCharsets.UTF_8), Base64.NO_WRAP));
         }
         return sb.toString();
+    }
+
+    /** SPEC-019：取应用图标并渲染为 144x144 PNG 的 Base64；包不存在或渲染失败返回 null */
+    private String iconBase64(String pkg) {
+        try {
+            PackageManager pm = getPackageManager();
+            Drawable d = pm.getApplicationIcon(pkg);
+            Bitmap bmp = Bitmap.createBitmap(144, 144, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(bmp);
+            d.setBounds(0, 0, 144, 144);
+            d.draw(c);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            bmp.recycle();
+            return Base64.encodeToString(bos.toByteArray(), Base64.NO_WRAP);
+        } catch (Exception e) {
+            Log.w(TAG, "icon fail: " + pkg, e);
+            return null;
+        }
     }
 
     /** 用 PackageManager 取 LAUNCHER 意图；Settings 特判为系统设置 action */

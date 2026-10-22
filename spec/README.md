@@ -92,5 +92,6 @@ spec/
 | SPEC-016 | 应用快捷动态列表 | implemented |
 | SPEC-017 | 基于 GitHub Release 的 OTA 更新 | implemented |
 | SPEC-018 | OK 键长按与陀螺仪飞鼠 | developing |
+| SPEC-019 | 应用快捷方式显示真实图标 | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。
