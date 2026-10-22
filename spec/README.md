@@ -105,5 +105,7 @@ spec/
 | SPEC-029 | 触控板双模式（触摸 / 鼠标兜底） | developing |
 | SPEC-030 | OTA 双源探测（GitHub + Gitee） | developing |
 | SPEC-031 | 「有更新」标签橘色背景 | developing |
+| SPEC-032 | 无障碍根节点为空时的 OK 键回退 | developing |
+| SPEC-033 | 盒端界面宽屏双栏与二维码前置 | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。
