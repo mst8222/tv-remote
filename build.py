@@ -95,7 +95,7 @@ def link_resources(extra):
            "--manifest", os.path.join(APP, "AndroidManifest.xml"),
            "--java", gendir,
            "--min-sdk-version", "26", "--target-sdk-version", "30",
-           "--version-code", "9", "--version-name", "1.6.5"]
+           "--version-code", "10", "--version-name", "1.6.6"]
     if assets:
         cmd += ["-A", assets]
     run(cmd + extra)

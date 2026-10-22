@@ -103,5 +103,6 @@ spec/
 | SPEC-027 | 启动自动探测更新与「有更新」标签 | developing |
 | SPEC-028 | 触控板绝对触摸（点哪打哪） | developing |
 | SPEC-029 | 触控板双模式（触摸 / 鼠标兜底） | developing |
+| SPEC-030 | OTA 双源探测（GitHub + Gitee） | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。

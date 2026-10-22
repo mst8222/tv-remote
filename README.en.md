@@ -16,6 +16,9 @@ No root · No developer options · No wireless debugging
   <a href="https://github.com/mst8222/tv-remote/releases/latest">
     <img src="https://img.shields.io/github/v/release/mst8222/tv-remote?color=brightgreen&include_prereleases" alt="release">
   </a><!--
+  --><a href="https://gitee.com/moston/tv-remote/releases">
+    <img src="https://img.shields.io/badge/Gitee-mirror-C71D23" alt="Gitee mirror">
+  </a><!--
   --><a href="./LICENSE">
     <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="license">
   </a><!--
@@ -75,7 +78,7 @@ pairing and connection mode.
 | No root | Box side uses the accessibility service, `AudioManager` and `PackageManager` |
 | Auto start | Foreground service with a notification, started again on boot/reboot |
 | Bilingual UI | Phone: Chinese / English / follow system; box follows the box system language |
-| In-app update | Both apps read the latest GitHub Release, download the APK and let the system installer confirm |
+| In-app update | Both apps query the latest GitHub and Gitee releases, prompt when either is newer, and prefer Gitee for the download |
 
 ### App shortcut rules
 
@@ -260,7 +263,7 @@ Network requirements:
 | Volume / Mute | Adjusts box media volume |
 | Text input | Writes into the focused editable field; fails if the current screen has none |
 | App shortcuts | Dynamically lists every launchable third-party app on the box (name + real icon) |
-| Check for updates | Phone: "About" card; box: "Version update" card. Reads the latest GitHub Release, downloads the APK, and the system installer confirms |
+| Check for updates | Phone: "About" card; box: "Version update" card. Queries GitHub and Gitee, takes the higher version, downloads from Gitee first and falls back to GitHub; the system installer confirms |
 
 ## Direct protocol
 
@@ -366,7 +369,7 @@ aapt2 → javac → d8 → dex packaging → zipalign → apksigner.
 | Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
 | Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
 | Web remote does not open | Confirm the same WiFi and use the address shown on the box (`http://<ip>:17880`); for `https://<ip>:17843` first trust the self-signed certificate in the browser |
-| An "Update" badge appears in the header | The app checks the latest GitHub Release on every launch; tap the badge to read the release notes. Ignoring it is fine |
+| An "Update" badge appears in the header | Every launch queries the latest GitHub and Gitee releases and prompts when either is newer; tap the badge to read the release notes. Ignoring it is fine |
 
 ## Scope and limitations
 
@@ -409,20 +412,25 @@ Known limitations:
 - App shortcuts cover third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry; pure service apps
   and apps without a launcher entry are not listed.
 - `LIST` relies on the `<queries>` declaration in the box app manifest (Android 11+ package visibility).
-- In-app updates need access to `api.github.com`; the anonymous API limit is 60 requests per hour,
-  and the app reports a retry-later error when exceeded.
-- The APK is downloaded through the GitHub API asset endpoint (the browser download host is blocked
-  on some networks); networks that cannot reach GitHub at all still need a proxy.
+- In-app updates query both the GitHub and Gitee public releases; a newer version on either source
+  triggers the badge. The anonymous GitHub API limit is 60 requests per hour, and the other source
+  covers that failure.
+- The APK is downloaded from the Gitee direct URL first and falls back to the GitHub API asset
+  endpoint; when neither source is reachable, use a proxy or download the APK manually.
 - Updates always go through the system install confirmation (no silent install). Some Android
   versions additionally require allowing this app to install unknown apps; on the box the
   installer dialog must be confirmed with the physical remote.
 - The box "Check for updates" button handles both remote OK/ENTER and touch, because some firmware
   does not fire the default click for a focusable TextView.
-- The startup update check runs once per app launch (no background polling). If `api.github.com`
-  is unreachable it fails silently; use "Check for updates" on the About card to retry.
+- The startup update check runs once per app launch (no background polling). It fails silently when
+  both sources are unreachable; use "Check for updates" on the About card to retry.
 
 ## Versions
 
+- **v1.6.6**: in-app updates now query two sources: the GitHub and Gitee public releases are
+  checked together, and the higher version on either source triggers the update badge. Downloads
+  use the Gitee direct URL first and fall back to the GitHub asset API, so networks where GitHub
+  is unreachable can still check and upgrade through Gitee.
 - **v1.6.5**: both touchpads now switch between D-pad / Touch / Mouse. Touch maps your finger
   directly onto the box screen (tap exactly where you point; tap, long-press, single-finger
   swipe), while Mouse drags the box cursor (tap to click, hold to long-press, two-finger scroll),
@@ -483,7 +491,7 @@ Redistributions and modified works must retain this license and copyright notice
 
 If this project helps you, please consider giving it a Star.
 
-[Releases](https://github.com/mst8222/tv-remote/releases) • [Issues](https://github.com/mst8222/tv-remote/issues)
+[GitHub Releases](https://github.com/mst8222/tv-remote/releases) • [Gitee Releases](https://gitee.com/moston/tv-remote/releases) • [Issues](https://github.com/mst8222/tv-remote/issues)
 
 <sub>TV Remote · Noncommercial use only</sub>
 

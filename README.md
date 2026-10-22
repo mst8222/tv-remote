@@ -16,6 +16,9 @@
   <a href="https://github.com/mst8222/tv-remote/releases/latest">
     <img src="https://img.shields.io/github/v/release/mst8222/tv-remote?color=brightgreen&include_prereleases" alt="release">
   </a><!--
+  --><a href="https://gitee.com/moston/tv-remote/releases">
+    <img src="https://img.shields.io/badge/Gitee-%E9%95%9C%E5%83%8F-C71D23" alt="Gitee 镜像">
+  </a><!--
   --><a href="./LICENSE">
     <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="license">
   </a><!--
@@ -70,7 +73,7 @@
 | 免 root | 盒端通过无障碍服务、`AudioManager`、`PackageManager` 完成控制 |
 | 开机自启 | 前台服务常驻，开机/重启后自动拉起 |
 | 中英文界面 | 手机端支持中文 / English / 跟随系统；盒子端跟随盒子系统语言 |
-| 应用内更新 | 两端读取 GitHub 最新 Release，下载 APK 后交给系统安装界面确认 |
+| 应用内更新 | 两端同时读取 GitHub 与 Gitee 的最新 Release，任一源版本更高即提示，下载优先走 Gitee |
 
 ### 应用快捷的显示规则
 
@@ -246,7 +249,7 @@
 | 音量 / 静音 | 调整盒子媒体音量 |
 | 文字输入 | 写入盒子当前焦点输入框；当前界面没有输入框时提示执行失败 |
 | 应用快捷 | 动态显示盒子全部可启动的第三方应用（名称 + 真实图标） |
-| 检查更新 | 手机端在「关于」卡、盒子端在「版本更新」卡读取 GitHub 最新 Release，下载后由系统安装界面确认 |
+| 检查更新 | 手机端在「关于」卡、盒子端在「版本更新」卡同时查询 GitHub 与 Gitee 的 Release，取版本更高者，下载优先 Gitee，失败回退 GitHub，最终由系统安装界面确认 |
 
 ## 直连协议
 
@@ -351,7 +354,7 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 | 飞鼠开启后光标不动 | 盒子端缓存了首次配对时的 HID 描述符：在盒子蓝牙设置里删除与手机的配对，再重新配对一次；H96 等固件删除配对后仍不生效时，需重启盒子蓝牙或在 root 下改 `bt_config.conf` 的 `HidDescriptor` |
 | 盒子重启后连不上 | 确认服务已自启；部分固件需允许应用自启，或重新打开一次 App |
 | 网页遥控打不开 | 确认与盒子在同一 WiFi，地址取盒端界面显示的 `http://<IP>:17880`；`https://<IP>:17843` 需先在浏览器里信任自签证书 |
-| 顶栏出现「有更新」 | App 每次启动自动探测 GitHub 最新 Release，有新版本时提示；点击标签查看更新说明，忽略不影响使用 |
+| 顶栏出现「有更新」 | App 每次启动自动探测 GitHub 与 Gitee 的最新 Release，任一源有更高版本时提示；点击标签查看更新说明，忽略不影响使用 |
 
 ## 适用范围与已知限制
 
@@ -390,18 +393,22 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
   重新配对一次，否则盒子仍按「无鼠标」的旧描述符建输入设备，飞鼠无反应。
 - 应用快捷覆盖盒子上有启动入口的第三方应用；纯服务类/无桌面入口的应用不会列出。
 - 盒子端 `LIST` 依赖 Android 11+ 的包可见性声明（manifest 中的 `<queries>`）。
-- 应用内更新需要能访问 `api.github.com`；接口匿名限流为每小时 60 次，超限时提示稍后重试。
-- 安装包通过 GitHub API 的资产端点下载（浏览器下载域名在部分网络会被卡住）；
-  仍有网络无法访问 GitHub 时需自备代理。
+- 应用内更新同时查询 GitHub 与 Gitee 的公开 Release，任一源有更高版本即提示；
+  GitHub 匿名接口限流为每小时 60 次，超限时该源失败、由另一源兜底。
+- 安装包优先从 Gitee 直链下载，失败回退 GitHub API 资产端点；两个源都不可达时
+  需自备代理或手动下载 APK。
 - 更新必须经过系统安装确认，无法静默安装；部分安卓版本还需在系统设置里允许本应用
   安装未知应用。盒子端安装界面需要用物理遥控选择确认。
 - 盒子端「检查更新」按钮同时处理遥控 OK/ENTER 与触屏点击（部分固件可聚焦 TextView
   不响应默认 OK 事件）。
-- 启动更新探测每次打开 App 执行一次，不做后台定时轮询；访问不到 `api.github.com`
-  时静默忽略，可在「关于」卡手动重试。
+- 启动更新探测每次打开 App 执行一次，不做后台定时轮询；两个源都不可达时静默忽略，
+  可在「关于」卡手动重试。
 
 ## 版本记录
 
+- **v1.6.6**：应用内更新改为双源探测：同时查询 GitHub 与 Gitee 的公开 Release，
+  任一源有更高版本即显示「有更新」；下载优先走 Gitee 直链，失败回退 GitHub 资产接口。
+  GitHub 在部分国内网络不可达时仍可通过 Gitee 完成检查与升级。
 - **v1.6.5**：两端触控板改为「方向盘 / 触摸 / 鼠标」三段。触摸模式把手指位置直接映射到
   盒子屏幕（点哪打哪，点按 / 长按 / 单指滑动），鼠标模式拖动移动盒端光标（点按单击、
   按住长按、双指滚动），适配不支持绝对触摸的盒子固件；修复盒端分辨率覆盖后触摸坐标
@@ -451,7 +458,7 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 
 如果这个项目对你有帮助，欢迎点一个 Star。
 
-[Releases](https://github.com/mst8222/tv-remote/releases) • [Issues](https://github.com/mst8222/tv-remote/issues)
+[GitHub Releases](https://github.com/mst8222/tv-remote/releases) • [Gitee Releases](https://gitee.com/moston/tv-remote/releases) • [Issues](https://github.com/mst8222/tv-remote/issues)
 
 <sub>TV 遥控器 · 仅限非商业使用</sub>
 
