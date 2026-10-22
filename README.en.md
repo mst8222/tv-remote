@@ -67,7 +67,7 @@ pairing and connection mode.
 |---|---|
 | Full keypad | D-pad, OK, Back, Home, Menu, Power, volume, mute |
 | Text input | Type on the phone and write into the box's focused field |
-| App shortcuts | Dynamically lists every launchable third-party app; Settings is always first |
+| App shortcuts | Dynamically lists every launchable third-party app with its real box icon; Settings is always first |
 | Air mouse | BT HID mode: tilt the phone to move the box cursor, OK acts as left click |
 | OK long-press | BT mode keeps sending key-down and lets the TV app decide; direct mode sends a long-press command on release after 500 ms |
 | Multi-device | LAN scan, manual add, switch and delete; pairing and connection mode remembered per device |
@@ -84,7 +84,9 @@ pinned first and always shown.
 
 - Labels come from `PackageManager.getApplicationLabel` in the box's system language;
 - only third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry are listed;
-- icons are not transferred; the first character of the label is shown;
+- icons are fetched on demand via `ICON <token> <package>` (144x144 PNG, Base64): the
+  first character is shown first, then replaced by the real icon and cached in memory
+  (keyed by box IP + package); failures keep the placeholder;
 - text input and app shortcuts are available only in direct mode.
 
 ## Screenshots
@@ -143,7 +145,7 @@ pinned first and always shown.
 
 | Component | Port / mechanism | Role |
 |---|---|---|
-| `ServerService` | TCP 8899 | Handles `PING` / `PAIR` / `KEY` / `KEYLONG` / `TEXT` / `APP` / `LIST` |
+| `ServerService` | TCP 8899 | Handles `PING` / `PAIR` / `KEY` / `KEYLONG` / `TEXT` / `APP` / `LIST` / `ICON` |
 | Discovery | UDP 8898 | Box broadcasts `TVREMOTE\|8899\|<model>` every 3 seconds |
 | `TvRemoteAccessibilityService` | Android accessibility API | Global keys, focus traversal, text input, long-press injection |
 | `BootReceiver` | Boot broadcast | Restarts the service after a power cycle |
@@ -181,8 +183,7 @@ Network requirements:
 
 ### 1. Box side
 
-1. Download `TVRemoteServer.apk` from [Releases](https://github.com/mst8222/tv-remote/releases/latest)
-   and install it (USB drive or `adb install`).
+1. Install `dist/TVRemoteServer.apk` (USB drive or `adb install`).
 2. Open "TV Remote Service" and allow notifications. The screen shows the **6-digit pair code**
    and the box IP.
 3. Open box Settings → Accessibility and enable "TV Remote Service".
@@ -193,8 +194,7 @@ Network requirements:
 
 ### 2. Phone · LAN direct
 
-1. Download `TVRemote.apk` from [Releases](https://github.com/mst8222/tv-remote/releases/latest)
-   and install it; connect the phone to the same Wi-Fi as the box.
+1. Install `dist/TVRemote.apk`; connect the phone to the same Wi-Fi as the box.
 2. Open the app. Tap "Scan" and pick the box in the result list, or tap "Add" and enter a name and IP.
 3. Tap "Direct", enter the 6-digit code shown on the box, then "Pair and connect".
 4. The remote is ready. Pairing is stored per box IP and restored automatically next time.
@@ -235,7 +235,7 @@ Network requirements:
 | Power | Locks the box screen (not a real power off) |
 | Volume / Mute | Adjusts box media volume |
 | Text input | Writes into the focused editable field; fails if the current screen has none |
-| App shortcuts | Dynamically lists every launchable third-party app on the box (name + first-letter icon) |
+| App shortcuts | Dynamically lists every launchable third-party app on the box (name + real icon) |
 | Check for updates | Phone: "About" card; box: "Version update" card. Reads the latest GitHub Release, downloads the APK, and the system installer confirms |
 
 ## Direct protocol
@@ -251,8 +251,48 @@ Box TCP 8899, one command per line terminated by `\n`.
 | `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
 | `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
 | `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
+| `ICON <token> <package>` | `OK <base64(PNG)>` / `ERR arg` | App icon (144x144 PNG); accessibility not required; unknown package returns `ERR arg` |
 
 UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds for auto-discovery.
+
+## Tests
+
+```powershell
+powershell -File tests\protocol\run.ps1
+```
+
+Pure-Java protocol regression, 64 cases; expected output `通过 64，失败 0` (64 passed, 0 failed).
+Port 8898 must be free. If a real box is broadcasting on the LAN, the `discover_no_broadcast_null`
+case can fail due to that real broadcast; this is environment noise.
+
+## Project layout
+
+```
+tv-remote/
+├── app/                    # Phone app, com.koco.tvremote
+│   ├── AndroidManifest.xml
+│   ├── res/                # Icons + Chinese/English strings (default zh, values-en for English)
+│   └── src/com/koco/tvremote/
+│       ├── MainActivity.java   # UI and interaction, built in code (no layout XML)
+│       ├── LanClient.java      # Direct client (TCP + UDP discovery)
+│       ├── BtHid.java          # Bluetooth HID keyboard / consumer control / mouse (air mouse)
+│       └── Errors.java         # Localized error mapping
+├── server/                 # Box app, com.koco.tvremoteserver
+│   ├── AndroidManifest.xml
+│   ├── res/                # Icons + UI/notification strings
+│   └── src/com/koco.tvremoteserver/
+│       ├── MainActivity.java                  # Pair code / address / accessibility status
+│       ├── ServerService.java                 # Foreground service, TCP 8899 + UDP 8898
+│       ├── TvRemoteAccessibilityService.java  # Root-free key/text injection
+│       └── BootReceiver.java                  # Start on boot
+├── docs/screenshots/       # README screenshots
+├── spec/                   # Requirements and specs (planned / developing / implemented / discarded)
+├── tests/                  # protocol regression + manual acceptance checklists
+├── tools/                  # PC-side Java protocol prototypes (ADB / TLS)
+├── build.py                # One-command build
+├── keys/                   # Signing keys (not committed)
+└── dist/                   # Build output (not committed)
+```
 
 ## Build
 
@@ -331,6 +371,8 @@ Known limitations:
 
 ## Versions
 
+- **v1.5.1**: app shortcuts now show the box's real app icons (new `ICON` command, lazy-loaded
+  144x144 PNG per package; the first-character placeholder stays if loading fails).
 - **v1.5.0**: OK now distinguishes short and long press (BT sends key down/up; direct mode adds a
   `KEYLONG` command); a new air-mouse key at the top-right of the remote card uses the phone
   gyroscope to move the box cursor in BT HID mode, with OK as left click.
@@ -350,6 +392,12 @@ Known limitations:
   target remembered per device; Bluetooth Back/Home switched to consumer control
   (`AC Back` / `AC Home`).
 - **v1.1**: removed phone-side ADB control; kept "Direct + Bluetooth".
+
+## Development docs
+
+- Requirements and acceptance records: [spec/](spec/README.md)
+- Test conventions and manual checklists: [tests/](tests/README.md)
+- Development rules for all sessions: [AGENTS.md](AGENTS.md)
 
 ## License
 

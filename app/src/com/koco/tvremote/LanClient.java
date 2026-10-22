@@ -108,6 +108,13 @@ public class LanClient {
         return r.substring(3).trim();
     }
 
+    /** SPEC-019：取盒子端应用图标（144x144 PNG），包不存在时抛异常 */
+    public byte[] icon(String pkg) throws Exception {
+        String r = cmd("ICON " + token + " " + pkg, 6000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+        return Base64.getDecoder().decode(r.substring(3).trim());
+    }
+
     public void close() {
         try { if (sock != null) sock.close(); } catch (Exception ignored) {}
         sock = null;

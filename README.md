@@ -62,7 +62,7 @@
 |---|---|
 | 完整按键 | 方向、OK、返回、主页、菜单、电源、音量、静音 |
 | 文字输入 | 手机输入搜索词或账号密码，写入盒子当前焦点输入框 |
-| 应用快捷 | 动态列出盒子全部可启动的第三方应用，首项固定为「设置」 |
+| 应用快捷 | 动态列出盒子全部可启动的第三方应用并显示盒子端真实图标，首项固定为「设置」 |
 | 飞鼠 | 蓝牙 HID 模式下用手机陀螺仪移动盒子光标，OK 作为鼠标左键 |
 | OK 长按 | 蓝牙模式持续发送按下由盒子应用判定；直连模式按住 500ms 以上在抬起时发送长按命令 |
 | 多设备管理 | 局域网扫描、手动添加、切换与删除；配对信息和连接方式按设备记忆 |
@@ -78,7 +78,8 @@
 
 - 应用名取盒子系统语言下的 `PackageManager.getApplicationLabel`；
 - 只包含有启动入口（LAUNCHER / LEANBACK_LAUNCHER）的第三方应用；
-- 应用图标不做传输，显示名称首字；
+- 图标通过 `ICON <token> <包名>` 按需拉取（144x144 PNG，Base64）：先显示名称首字，
+  取回后替换并缓存（按设备 IP + 包名，内存级），失败保持首字占位；
 - 应用快捷和文字输入只在直连模式可用。
 
 ## 界面截图
@@ -136,7 +137,7 @@
 
 | 组件 | 端口 / 机制 | 作用 |
 |---|---|---|
-| `ServerService` | TCP 8899 | 接收 `PING` / `PAIR` / `KEY` / `KEYLONG` / `TEXT` / `APP` / `LIST` |
+| `ServerService` | TCP 8899 | 接收 `PING` / `PAIR` / `KEY` / `KEYLONG` / `TEXT` / `APP` / `LIST` / `ICON` |
 | 设备发现 | UDP 8898 | 盒子每 3 秒广播 `TVREMOTE\|8899\|<盒子型号>` |
 | `TvRemoteAccessibilityService` | 系统无障碍 API | 全局按键、焦点遍历、文本写入、长按注入 |
 | `BootReceiver` | 开机广播 | 断电重启后自动拉起服务 |
@@ -172,7 +173,7 @@
 
 ### 1. 安装盒子端
 
-1. 从 [Releases](https://github.com/mst8222/tv-remote/releases/latest) 下载 `TVRemoteServer.apk`，用 U 盘安装或 `adb install`。
+1. 安装 `dist/TVRemoteServer.apk`（U 盘安装或 `adb install`）。
 2. 打开「TV遥控服务」，允许通知权限。界面会显示 **6 位配对码** 和 **本机 IP**。
 3. 进入盒子「设置 → 无障碍」，开启「TV遥控服务」。
 4. 之后保持服务运行即可；开机/重启会自动启动。
@@ -181,7 +182,7 @@
 
 ### 2. 手机端 · 局域网直连
 
-1. 从 [Releases](https://github.com/mst8222/tv-remote/releases/latest) 下载 `TVRemote.apk` 安装，手机与盒子连同一个 WiFi。
+1. 安装 `dist/TVRemote.apk`，手机与盒子连同一个 WiFi。
 2. 打开 App。点顶部「扫描」，在扫描结果里点选盒子；或点「添加」手动填写名称和 IP。
 3. 点「直连」，输入盒子屏幕上的 6 位配对码，点「配对并连接」。
 4. 配对成功后即可按键。配对信息按盒子 IP 保存，下次打开自动恢复。
@@ -220,7 +221,7 @@
 | 电源 | 盒子系统锁屏（不是真正关机） |
 | 音量 / 静音 | 调整盒子媒体音量 |
 | 文字输入 | 写入盒子当前焦点输入框；当前界面没有输入框时提示执行失败 |
-| 应用快捷 | 动态显示盒子全部可启动的第三方应用（名称 + 首字图标） |
+| 应用快捷 | 动态显示盒子全部可启动的第三方应用（名称 + 真实图标） |
 | 检查更新 | 手机端在「关于」卡、盒子端在「版本更新」卡读取 GitHub 最新 Release，下载后由系统安装界面确认 |
 
 ## 直连协议
@@ -236,8 +237,48 @@
 | `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | 写入当前输入框（base64 编码 UTF-8） |
 | `APP <token> <包名>` | `OK` / `ERR exec` | 启动应用，不依赖无障碍 |
 | `LIST <token>` | `OK <包名\|base64(应用名),逗号分隔>` | 第三方可启动应用列表，不依赖无障碍 |
+| `ICON <token> <包名>` | `OK <base64(PNG)>` / `ERR arg` | 应用图标（144x144 PNG），不依赖无障碍；未知包返回 `ERR arg` |
 
 UDP 8898 广播格式：`TVREMOTE|8899|<盒子型号>`，每 3 秒一次，供手机自动发现。
+
+## 测试
+
+```powershell
+powershell -File tests\protocol\run.ps1
+```
+
+纯 Java 协议回归，共 64 项，正常输出 `通过 64，失败 0`。
+要求本机 8898 端口空闲；若局域网中有真实盒子在广播，`discover_no_broadcast_null`
+这一项会因收到真实广播而失败，属于环境干扰。
+
+## 目录结构
+
+```
+tv-remote/
+├── app/                    # 手机端 com.koco.tvremote
+│   ├── AndroidManifest.xml
+│   ├── res/                # 图标 + 中英文文案（默认中文，values-en 英文）
+│   └── src/com/koco/tvremote/
+│       ├── MainActivity.java   # 界面与交互（纯代码构建，无 layout XML）
+│       ├── LanClient.java      # 直连客户端（TCP + UDP 发现）
+│       ├── BtHid.java          # 蓝牙 HID 键盘/消费者控制/鼠标（飞鼠）
+│       └── Errors.java         # 异常到本地化报错文案
+├── server/                 # 盒子端 com.koco.tvremoteserver
+│   ├── AndroidManifest.xml
+│   ├── res/                # 图标 + 界面/通知文案
+│   └── src/com/koco.tvremoteserver/
+│       ├── MainActivity.java                  # 配对码 / 地址 / 无障碍状态
+│       ├── ServerService.java                 # 前台服务，TCP 8899 + UDP 8898
+│       ├── TvRemoteAccessibilityService.java  # 无 root 按键/文字注入
+│       └── BootReceiver.java                  # 开机自启
+├── docs/screenshots/       # README 截图
+├── spec/                   # 需求与规格（planned / developing / implemented / discarded）
+├── tests/                  # protocol 自动测试 + manual 手工验收清单
+├── tools/                  # PC 端 Java 协议原型（ADB / TLS）
+├── build.py                # 一键构建
+├── keys/                   # 签名与密钥（不入库）
+└── dist/                   # 构建产物（不入库）
+```
 
 ## 构建
 
@@ -312,6 +353,8 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 
 ## 版本记录
 
+- **v1.5.1**：应用快捷显示盒子端真实图标（新增 `ICON` 协议命令，按包名懒加载
+  144x144 PNG，失败保持首字占位）。
 - **v1.5.0**：OK 键支持短按/长按（蓝牙发按下-抬起，直连新增 `KEYLONG` 长按命令）；
   遥控器卡右上角新增飞鼠键，蓝牙 HID 模式用手机陀螺仪移动盒子光标，OK 为左键。
   升级说明：曾在旧版本配对过的盒子需删除配对并重新配对一次，飞鼠才会生效。
@@ -326,6 +369,12 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 - **v1.2**：盒端去 root，改用无障碍服务注入；连接方式与蓝牙目标按设备记忆；
   蓝牙返回/主页改用消费者控制（`AC Back` / `AC Home`）。
 - **v1.1**：移除手机端 ADB 控制，保留「直连 + 蓝牙」两种方式。
+
+## 开发文档
+
+- 需求与验收记录：[spec/](spec/README.md)
+- 自动测试与手工验收清单：[tests/](tests/README.md)
+- 所有会话的开发规范：[AGENTS.md](AGENTS.md)
 
 ## 许可
 
