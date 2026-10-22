@@ -427,6 +427,12 @@ Known limitations:
 
 ## Versions
 
+- **v1.6.8**: the box UI uses two columns on wide screens (TV / DeX) and the QR code now sits
+  in the pairing-code card, enlarged and rendered 1:1 at screen density, so it is scannable on
+  the first screen without scrolling. Direct-mode OK on windows that expose no accessibility
+  nodes (such as some apps' exit-confirmation dialogs) now injects the system OK key instead of
+  reporting "no actionable focus or input field"; on firmware that rejects that global action,
+  use touchpad Touch or Bluetooth mode instead.
 - **v1.6.7**: the header "Update" badge now uses an orange background to stand out from the
   blue primary action color; all other colors are unchanged.
 - **v1.6.6**: in-app updates now query two sources: the GitHub and Gitee public releases are

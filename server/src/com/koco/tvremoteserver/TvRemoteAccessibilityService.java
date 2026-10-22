@@ -137,7 +137,8 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
 
     /**
      * SPEC-018：长按。只支持 OK（23），对当前焦点节点执行长按。
-     * 节点不可长按时视为无操作（RES_OK），与方向键到边界的行为一致。
+     * 节点不可长按时视为无操作（RES_OK），与方向键到边界的行为一致；
+     * 窗口不暴露节点树时按 SPEC-032 退化为系统 OK 键。
      */
     public static int keyLong(Context c, int code) {
         if (code != 23) return RES_UNSUPPORTED;
@@ -154,7 +155,13 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
      */
     private int pressFocused(boolean longPress) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return RES_FAIL;
+        if (root == null) {
+            // SPEC-032：部分应用与系统窗口不向无障碍暴露节点树
+            // （实测云视听小电视退出弹窗、Android TV 通知面板），
+            // 节点路径不可用，直接注入系统 OK 键；长按退化为短按。
+            return performGlobalAction(AccessibilityService.GLOBAL_ACTION_DPAD_CENTER)
+                    ? RES_OK : RES_FAIL;
+        }
         AccessibilityNodeInfo focus = findCurrentFocus(root);
         if (focus == null) return RES_OK; // 界面没有焦点，视为无操作
         AccessibilityNodeInfo target = findFocusedDescendant(focus, 0);
