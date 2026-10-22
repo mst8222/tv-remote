@@ -9,8 +9,9 @@
     <string name="ui_grp_status">服务状态</string>
     <string name="ui_grp_pair">配对码</string>
     <string name="ui_grp_addr">连接地址</string>
-    <string name="ui_local_addr">本机地址：%1$s　端口：%2$d\n发现端口：%3$d</string>
+    <string name="ui_local_addr">本机地址：%1$s　端口：%2$d\n发现端口：%3$d\n网页遥控：http://%1$s:%4$d　https://%1$s:%5$d</string>
     <string name="ui_no_network">未连接网络</string>
+    <string name="ui_qr_tip">手机扫码打开网页遥控（手机与盒子需在同一 Wi-Fi）</string>
     <string name="ui_a11y_ok">无障碍服务：已开启（按键可用）</string>
     <string name="ui_a11y_missing">无障碍服务：未开启（点此开启，开启后才能遥控）</string>
     <string name="ui_tip">第一次使用请在系统「设置 → 无障碍」里开启「TV遥控服务」，不需要 root。\n然后在手机 App 里选择「直连」或「蓝牙」，输入上面 6 位配对码即可。\n之后每次开机（包括断电重启）服务都会自动启动。</string>

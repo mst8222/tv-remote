@@ -53,7 +53,7 @@ public class BtHid {
             0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03,
             0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
             0xC0,
-            // SPEC-018 鼠标：按键 3 位 + 相对 X/Y（int8）
+            // SPEC-018 鼠标：按键 3 位 + 相对 X/Y（int8）；SPEC-023 增加滚轮
             0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
             0x85, 0x03,
             0x09, 0x01, 0xA1, 0x00,
@@ -62,6 +62,8 @@ public class BtHid {
             0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
             0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
             0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+            0x09, 0x38,
+            0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
             0xC0,
             0xC0
     };
@@ -108,6 +110,8 @@ public class BtHid {
     /** SPEC-018：两次鼠标报告之间的累计位移与上次发送时间 */
     private int pendX = 0, pendY = 0;
     private long lastMouseAt = 0;
+    /** SPEC-023：有待发位移时在下一个周期补发，避免快速滑动丢位移 */
+    private boolean drainScheduled = false;
 
     public BtHid(Context c) {
         this.ctx = c.getApplicationContext();
@@ -256,39 +260,88 @@ public class BtHid {
     }
 
     /**
-     * SPEC-018 飞鼠：发送鼠标相对位移（按键状态保持）。
+     * SPEC-018 飞鼠：发送鼠标相对位移（按键状态保持），单次上限 20。
      * 传感器事件约 20ms 一次；更密集的事件先累计，到间隔再合并发送，
      * 避免 HID 队列堆积造成光标的滞后漂移。
      */
     public boolean sendMouseMove(int dx, int dy) {
+        return sendMouseMove(dx, dy, 20);
+    }
+
+    /** SPEC-023 触控板：单次上限可放大，超出部分留到下一周期补发，不丢位移 */
+    public boolean sendMouseMove(int dx, int dy, int maxStep) {
         if (!isReady()) return false;
-        BluetoothDevice d = target;
-        if (d == null) return false;
+        if (target == null) return false;
         pendX += dx;
         pendY += dy;
         long now = SystemClock.uptimeMillis();
-        if (now - lastMouseAt < 20) return true;
+        if (now - lastMouseAt < 20) {
+            scheduleDrain(maxStep);
+            return true;
+        }
         lastMouseAt = now;
-        int x = clampMove(pendX), y = clampMove(pendY);
-        pendX = 0;
-        pendY = 0;
-        return sendMouseReport(d, x, y);
+        return flushMove(maxStep);
     }
 
-    /** SPEC-018 飞鼠：设置鼠标按键（1=左键按下，0=释放） */
+    /** 取当前应发送的一段位移，保留超出上限的余量 */
+    private boolean flushMove(int maxStep) {
+        BluetoothDevice d = target;
+        if (!isReady() || d == null) return false;
+        int x = clampMove(pendX, maxStep);
+        int y = clampMove(pendY, maxStep);
+        pendX -= x;
+        pendY -= y;
+        boolean ok = sendMouseReport(d, x, y, 0);
+        if (pendX != 0 || pendY != 0) scheduleDrain(maxStep);
+        return ok;
+    }
+
+    private void scheduleDrain(int maxStep) {
+        if (drainScheduled) return;
+        drainScheduled = true;
+        main.postDelayed(() -> {
+            drainScheduled = false;
+            if (pendX != 0 || pendY != 0) {
+                lastMouseAt = SystemClock.uptimeMillis();
+                flushMove(maxStep);
+            }
+        }, 20);
+    }
+
+    /** SPEC-018/023：设置鼠标按键（1=左键按下，0=释放）；先补发已累计位移 */
     public boolean sendMouseButton(int buttons) {
         if (!isReady()) return false;
         BluetoothDevice d = target;
         if (d == null) return false;
+        int x = clampMove(pendX, 127);
+        int y = clampMove(pendY, 127);
+        pendX -= x;
+        pendY -= y;
         mouseButtons = buttons & 0x03;
-        pendX = 0;
-        pendY = 0;
         lastMouseAt = SystemClock.uptimeMillis();
-        return sendMouseReport(d, 0, 0);
+        boolean ok = sendMouseReport(d, x, y, 0);
+        if (pendX != 0 || pendY != 0) scheduleDrain(127);
+        return ok;
     }
 
-    private boolean sendMouseReport(BluetoothDevice d, int x, int y) {
-        final byte[] r = new byte[]{(byte) mouseButtons, (byte) x, (byte) y};
+    /** SPEC-023：滚轮，正数向下/向前；先补发已累计位移再发滚轮 */
+    public boolean sendMouseScroll(int notches) {
+        if (!isReady()) return false;
+        BluetoothDevice d = target;
+        if (d == null) return false;
+        int x = clampMove(pendX, 127);
+        int y = clampMove(pendY, 127);
+        pendX -= x;
+        pendY -= y;
+        lastMouseAt = SystemClock.uptimeMillis();
+        int wheel = Math.max(-5, Math.min(5, notches));
+        boolean ok = sendMouseReport(d, x, y, wheel);
+        if (pendX != 0 || pendY != 0) scheduleDrain(127);
+        return ok;
+    }
+
+    private boolean sendMouseReport(BluetoothDevice d, int x, int y, int wheel) {
+        final byte[] r = new byte[]{(byte) mouseButtons, (byte) x, (byte) y, (byte) wheel};
         try {
             boolean ok = hid.sendReport(d, RID_MOUSE, r);
             if (!ok) Log.w(TAG, "sendMouseReport not queued");
@@ -299,9 +352,9 @@ public class BtHid {
         }
     }
 
-    /** -20..20，单次报告位移过大时盒子光标会瞬移 */
-    private static int clampMove(int v) {
-        return Math.max(-20, Math.min(20, v));
+    /** 单次报告位移上限，过大时盒子光标会瞬移 */
+    private static int clampMove(int v, int maxStep) {
+        return Math.max(-maxStep, Math.min(maxStep, v));
     }
 
     /** SPEC-018：释放所有按键与鼠标状态（退出飞鼠/断开前调用，防卡住） */
@@ -310,8 +363,9 @@ public class BtHid {
         mouseButtons = 0;
         pendX = 0;
         pendY = 0;
+        drainScheduled = false;
         if (hid == null || d == null) return;
-        try { hid.sendReport(d, RID_MOUSE, new byte[]{0, 0, 0}); } catch (Exception ignored) {}
+        try { hid.sendReport(d, RID_MOUSE, new byte[]{0, 0, 0, 0}); } catch (Exception ignored) {}
         try {
             hid.sendReport(d, RID_KEY, new byte[]{0, 0, 0, 0, 0, 0, 0, 0});
         } catch (Exception ignored) {}

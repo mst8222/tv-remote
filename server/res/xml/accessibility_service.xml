@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- SPEC-014：盒端无障碍服务配置，仅用于接收遥控命令并执行全局动作/文字输入 -->
+<!-- SPEC-014：盒端无障碍服务配置，接收遥控命令并执行全局动作/文字输入；
+     SPEC-021/023 需要合成触摸手势，必须声明 canPerformGestures -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault"
+    android:accessibilityFlags="flagDefault|flagReportViewIds"
+    android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:description="@string/a11y_desc"
     android:notificationTimeout="100" />

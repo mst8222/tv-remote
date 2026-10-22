@@ -10,6 +10,9 @@ gen/
 app/res.zip
 server/res.zip
 
+# 自动测试编译输出
+tests/protocol/build/
+
 # 由 build.py 自动生成的密钥常量（内含私钥，绝不入库）
 app/src/com/koco/tvremote/KeyConst.java
 
@@ -18,6 +21,7 @@ dist/
 
 # 密钥与签名文件（敏感，绝不入库）
 keys/
+server/assets/web/web.p12
 
 # 本地智能体工作区（非交付文档）
 .trae/

@@ -26,6 +26,14 @@
     <string name="air_need_bt">Air mouse needs BT mode: Direct cannot move the box cursor</string>
     <string name="air_no_sensor">This phone has no gyroscope, air mouse is unavailable</string>
 
+    <!-- Touchpad (SPEC-023) -->
+    <string name="input_dpad">D-pad</string>
+    <string name="input_touchpad">Touchpad</string>
+    <string name="touchpad_hint_top">Drag to move · Tap to select</string>
+    <string name="touchpad_hint_bottom">Two-finger swipe to scroll</string>
+    <string name="touchpad_need_bt">Touchpad needs a Bluetooth connection first</string>
+    <string name="touchpad_need_lan">Touchpad needs a paired Direct connection first</string>
+
     <!-- 应用快捷（应用名不翻译） -->
     <string name="app_settings">Settings</string>
 
@@ -43,6 +51,7 @@
     <string name="scan_found">Found %1$d devices</string>
     <string name="scan_title">Scan devices</string>
     <string name="scan_row_tap">%1$s  Tap to add and connect</string>
+    <string name="scan_unpaired">%1$s  Not paired</string>
     <string name="bt_initializing">Initializing Bluetooth HID…</string>
     <string name="bt_registered">Bluetooth HID registered</string>
     <string name="bt_register_failed">Bluetooth registration failed</string>
@@ -79,7 +88,9 @@
     <string name="lan_pair">Pair and connect</string>
     <string name="lan_discover">Auto discover</string>
     <string name="bt_unsupported_title">This phone cannot be a BT remote</string>
-    <string name="bt_unsupported_msg">%1$s\n\nTwo options:\n· Use Direct (TV Remote Service required on the box)\n· Buy a 2.4G air-mouse remote (about 30 RMB, plug and play)</string>
+    <string name="bt_unsupported_msg">%1$s\n\nThree options:\n· Use Direct (TV Remote Service required on the box)\n· Open the box web remote in your phone browser: %2$s\n· Buy a 2.4G air-mouse remote (about 30 RMB, plug and play)</string>
+    <string name="bt_web_addr">http://%1$s:17880</string>
+    <string name="bt_web_addr_unknown">Check the address on the box screen (TV Remote Service)</string>
     <string name="ok_got_it">Got it</string>
     <string name="bt_none_title">No paired devices yet</string>
     <string name="bt_none_msg">The box must search for this phone:\n\n1. Tap "Let the box find this phone"\n2. On the box: Settings → Bluetooth, choose this phone\n3. Confirm the code on both sides, then tap "BT"</string>
@@ -99,6 +110,7 @@
     <string name="grp_about">About</string>
     <string name="update_current">Current version v%1$s</string>
     <string name="update_check">Check for updates</string>
+    <string name="update_badge">Update</string>
     <string name="update_checking">Checking for updates…</string>
     <string name="update_latest">Already up to date: v%1$s</string>
     <string name="update_found_title">New version v%1$s</string>
@@ -129,6 +141,8 @@
     <string name="err_connect">Connection failed: check the phone and box are on the same WiFi with a working network, then retry</string>
     <string name="err_conn_lost">Connection lost: box network is unstable. Reconnected automatically, please tap again</string>
     <string name="err_badcode">Wrong pairing code: check the 6 digits shown on the TV and re-enter</string>
+    <string name="err_locked">Too many failed attempts: please wait 5 minutes and retry</string>
+    <string name="err_toolong">Text is too long: shorten it and retry (up to 256 characters)</string>
     <string name="err_auth_lost">Pairing expired: long-press "Direct" to clear pairing, then pair once more</string>
     <string name="err_a11y">Accessibility service is off on the box: open Settings → Accessibility on the box, enable "TV Remote Service", then retry</string>
     <string name="err_exec">The box could not perform it: no focused control or input field on the current screen. Open the target screen on the box and retry</string>

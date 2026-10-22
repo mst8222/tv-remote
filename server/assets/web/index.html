@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TV Remote</title>
+<meta name="theme-color" content="#0A0E14">
+<meta name="description" content="TV Remote web remote for the TV box">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TV Remote">
+<meta name="format-detection" content="telephone=no">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">TV Remote</div>
+    <div id="status" class="status">—</div>
+  </header>
+
+  <button id="devBtn" class="devBar" hidden>
+    <span class="devBarLabel" data-i18n="devicesTitle">设备</span>
+    <span id="devName" class="devBarName"></span>
+    <span class="devBarChev">⌄</span>
+  </button>
+
+  <p id="secureHint" class="hint" hidden></p>
+
+  <section id="pairCard" class="card">
+    <h2 data-i18n="pairTitle">连接电视盒子</h2>
+    <p class="sub" data-i18n="pairSub">输入电视上显示的 6 位配对码</p>
+    <input id="code" class="code" inputmode="numeric" maxlength="6"
+           autocomplete="one-time-code" placeholder="000000"
+           data-i18n-ph="codePlaceholder">
+    <button id="pairBtn" class="primary" data-i18n="pairBtn">配对</button>
+    <button id="addOtherBtn" class="linkBtn" data-i18n="addOther">添加其它盒子</button>
+    <p id="pairMsg" class="msg"></p>
+  </section>
+
+  <section id="remoteCard" class="card" hidden>
+    <div class="cardHead">
+      <h2 data-i18n="remoteTitle">遥控器</h2>
+    </div>
+    <div class="seg">
+      <button id="segDpad" class="on" data-i18n="modeDpad">方向盘</button>
+      <button id="segPad" data-i18n="modePad">触控板</button>
+    </div>
+    <div id="dpad" class="dpad">
+      <button class="d up" data-key="19" aria-label="up">▲</button>
+      <button class="d left" data-key="21" aria-label="left">◀</button>
+      <button id="okBtn" class="ok" aria-label="ok">OK</button>
+      <button class="d right" data-key="22" aria-label="right">▶</button>
+      <button class="d down" data-key="20" aria-label="down">▼</button>
+    </div>
+    <div id="touchpad" class="touchpad" hidden>
+      <span class="padTip" data-i18n="padTip1">拖动移动光标 · 点按确定</span>
+      <span class="padTip" data-i18n="padTip2">长按菜单 · 双指滑动滚动</span>
+    </div>
+    <div class="row sys">
+      <button data-key="4" aria-label="back">←</button>
+      <button data-key="3" aria-label="home">⌂</button>
+      <button data-key="82" aria-label="menu">≡</button>
+      <button id="powerBtn" class="power" data-key="26" data-i18n="power">电源</button>
+    </div>
+    <div class="row vol">
+      <div class="volPill">
+        <button data-key="25" aria-label="volume down">−</button>
+        <span class="volLabel" data-i18n="volume">音量</span>
+        <button data-key="24" aria-label="volume up">+</button>
+      </div>
+      <button class="muteKey" data-key="164" data-i18n="mute">静音</button>
+    </div>
+  </section>
+
+  <section id="inputCard" class="card" hidden>
+    <h2 data-i18n="inputTitle">文字输入</h2>
+    <div class="inputRow">
+      <input id="text" data-i18n-ph="textPlaceholder" placeholder="输入文字">
+      <button id="sendBtn" class="primary small" data-i18n="send">发送</button>
+    </div>
+  </section>
+
+  <section id="appsCard" class="card" hidden>
+    <h2 data-i18n="appsTitle">应用</h2>
+    <div id="apps" class="apps"></div>
+  </section>
+
+  <section id="offlineCard" class="card warn" hidden>
+    <h2 data-i18n="offlineTitle">未连接到盒子</h2>
+    <p class="sub" data-i18n="offlineMsg"></p>
+    <button id="retryBtn" class="primary" data-i18n="retry">重试连接</button>
+  </section>
+
+  <footer class="foot" data-i18n="foot">TV Remote Service · 局域网直连</footer>
+</div>
+
+<div id="devMask" class="mask" hidden></div>
+<section id="devSheet" class="sheet" hidden>
+  <div class="sheetHead">
+    <h2 data-i18n="devicesTitle">设备</h2>
+    <button id="devClose" class="iconBtn" aria-label="close">✕</button>
+  </div>
+  <div id="devList" class="devList"></div>
+  <button id="scanBtn" class="primary" data-i18n="scanAdd" hidden>扫码添加</button>
+  <p id="scanHint" class="hint" hidden></p>
+  <div class="addBox">
+    <p class="sub" data-i18n="manualAdd">手动添加</p>
+    <div class="addRow">
+      <input id="devAddr" autocomplete="off" placeholder="192.168.3.125"
+             data-i18n-ph="addrPlaceholder">
+      <input id="devCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+             placeholder="000000">
+    </div>
+    <button id="addBtn" class="primary" data-i18n="addBtn">添加</button>
+    <p id="devMsg" class="msg"></p>
+  </div>
+</section>
+
+<div id="scanOverlay" class="mask scanMask" hidden>
+  <div class="scanBox">
+    <video id="scanVideo" playsinline muted></video>
+    <p class="hint" data-i18n="scanTip">对准电视上的二维码</p>
+    <button id="scanCancel" class="primary small" data-i18n="cancel">取消</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

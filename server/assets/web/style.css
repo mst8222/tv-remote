@@ -1,0 +1,566 @@
+/* SPEC-020/025 Web 遥控页样式：深色、单列、最大 480px */
+:root {
+  --bg: #0A0E14;
+  --surface: #141A24;
+  --surface2: #1B2432;
+  --line: #263140;
+  --text: #EAEFF7;
+  --sub: #8A94A6;
+  --accent: #4F7CFF;
+  --danger: #FF5A5A;
+}
+
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+               "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 14px 28px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px 14px;
+}
+
+.brand {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: .4px;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--sub);
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.status.ok { color: #7CE2A7; border-color: #2E5A44; }
+.status.bad { color: var(--danger); border-color: #5A2E33; }
+
+/* 当前设备栏：点击打开设备面板 */
+.devBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.devBarLabel { color: var(--sub); font-size: 12px; flex: none; }
+
+.devBarName {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.devBarChev { color: var(--sub); font-size: 16px; flex: none; }
+
+.card {
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.card.warn { border: 1px solid #5A2E33; }
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .2px;
+}
+
+.sub, .hint, .msg, .foot {
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.hint { margin: 8px 2px 0; }
+.msg { margin: 10px 2px 0; min-height: 1em; color: var(--danger); }
+.foot { text-align: center; margin-top: 18px; }
+.foot:empty { display: none; }
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.cardHead h2 { margin: 0; }
+
+.code {
+  width: 100%;
+  height: 52px;
+  margin: 6px 0 12px;
+  padding: 0 14px;
+  font-size: 22px;
+  letter-spacing: 8px;
+  text-align: center;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  outline: none;
+}
+
+.code:focus, .inputRow input:focus { border-color: var(--accent); }
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+button:active { transform: scale(.97); background: #243247; }
+
+.primary {
+  width: 100%;
+  height: 46px;
+  background: linear-gradient(135deg, #4F7CFF, #3C63D8);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+
+.primary.small { width: auto; padding: 0 18px; height: 44px; flex: none; }
+
+.linkBtn {
+  width: 100%;
+  height: 38px;
+  margin-top: 8px;
+  background: none;
+  border: none;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+/* 方向盘 / 触控板分段切换 */
+.seg {
+  display: flex;
+  gap: 8px;
+  width: 236px;
+  margin: 8px auto 0;
+}
+
+.seg button {
+  flex: 1;
+  height: 34px;
+  font-size: 13px;
+  border-radius: 11px;
+  color: var(--sub);
+}
+
+.seg button.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 方向键：3x3 栅格，圆盘背景 */
+.dpad {
+  position: relative;
+  width: 236px;
+  height: 236px;
+  margin: 12px auto 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  place-items: center;
+  background: var(--surface2);
+  border-radius: 50%;
+  border: 2px solid var(--line);
+}
+
+.dpad .d {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  font-size: 15px;
+  background: #2E3A4C;
+  border: none;
+}
+
+.dpad .up    { grid-area: 1 / 2; }
+.dpad .left  { grid-area: 2 / 1; }
+.dpad .right { grid-area: 2 / 3; }
+.dpad .down  { grid-area: 3 / 2; }
+
+.dpad .ok {
+  grid-area: 2 / 2;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  font-size: 16px;
+  font-weight: 700;
+  background: #0E141D;
+  border: 3px solid var(--accent);
+}
+
+/* 触控板：宽度铺满卡片内容区，与系统键行等宽；高度沿用方向盘 */
+.touchpad {
+  width: 100%;
+  height: 236px;
+  margin: 12px 0 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  background: var(--surface2);
+  border: 2px solid var(--line);
+  border-radius: 28px;
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touchpad:active { border-color: var(--accent); }
+
+.padTip { pointer-events: none; }
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.row button {
+  height: 48px;
+  font-size: 15px;
+  padding: 0 4px;
+}
+
+/* 音量行与系统键行共用四列网格：胶囊占前三列，静音独占第四列并与电源对齐 */
+.row.vol { grid-template-columns: repeat(4, 1fr); }
+
+.volPill {
+  grid-column: 1 / span 3;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-items: center;
+  padding: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.volPill button {
+  height: 40px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  font-size: 19px;
+}
+
+.volPill button:active { background: #243247; }
+
+.volLabel {
+  text-align: center;
+  font-size: 15px;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.row .muteKey { height: 48px; }
+
+/* SPEC-025：电源键仅文字变红 */
+.row .power { color: var(--danger); }
+.row .power:active { color: #fff; }
+
+.inputRow {
+  display: flex;
+  gap: 10px;
+}
+
+.inputRow input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+}
+
+.apps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 8px;
+}
+
+.appItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+}
+
+.appItem img, .appItem .ph {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--surface2);
+  object-fit: contain;
+}
+
+.appItem span {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--sub);
+  text-align: center;
+  width: 100%;
+  max-height: 2.6em;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+/* 设备面板：遮罩 + 底部深色卡片 */
+.mask {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, .6);
+}
+
+.sheet {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 31;
+  width: 100%;
+  max-width: 480px;
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 18px 16px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-radius: 22px 22px 0 0;
+}
+
+.sheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sheetHead h2 { margin: 0; }
+
+.iconBtn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--sub);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+}
+
+.devList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.devRow {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.devRow.on {
+  border-color: var(--accent);
+  background: #1B2A4A;
+}
+
+.devPick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  text-align: left;
+}
+
+.devPick:active { background: none; }
+
+.devPickName { font-size: 14px; font-weight: 600; }
+
+.devRename {
+  width: 100%;
+  margin: 0;
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.devEdit {
+  flex: none;
+  align-self: center;
+  padding: 8px 6px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.devPickAddr {
+  font-size: 11px;
+  color: var(--sub);
+  word-break: break-all;
+}
+
+.devDel {
+  flex: none;
+  align-self: center;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.addBox {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.addBox .sub { margin: 0; }
+
+.addRow {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.addRow input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+  font-size: 14px;
+}
+
+.addRow input:focus { border-color: var(--accent); }
+
+#devCode {
+  flex: none;
+  width: 104px;
+  text-align: center;
+  letter-spacing: 3px;
+}
+
+.scanMask { align-items: center; }
+
+.scanBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(86vw, 420px);
+  padding: 16px;
+  background: var(--surface);
+  border-radius: 20px;
+}
+
+.scanBox video {
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  max-width: 86vw;
+  padding: 10px 16px;
+  background: #232D3F;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  z-index: 40;
+}
+
+@media (max-width: 359px) {
+  .apps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dpad { width: 208px; height: 208px; }
+  .touchpad { width: 100%; height: 208px; }
+  .dpad .ok { width: 76px; height: 76px; }
+  .seg { width: 208px; }
+  #devCode { width: 92px; }
+}

@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
@@ -21,6 +22,7 @@ import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.DatagramPacket;
@@ -28,9 +30,16 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.security.KeyStore;
 import java.security.SecureRandom;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocketFactory;
 
 /**
  * 盒子端的遥控服务：监听 TCP 8899，收到命令后经无障碍服务注入。
@@ -44,6 +53,11 @@ import java.util.concurrent.Executors;
  *   APP <token> <包名>         -> OK | ERR exec
  *   LIST <token>              -> OK <包名|base64(应用名),逗号分隔>
  *   ICON <token> <包名>        -> OK <base64(PNG)> | ERR arg | ERR exec（SPEC-019）
+ *   MOVE <token> <dx> <dy>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-021，单轴 -127..127）
+ *   MCLICK <token> <0|1>      -> OK | ERR arg | ERR a11y | ERR exec（SPEC-021）
+ *   MTAP <token>              -> OK | ERR a11y | ERR exec（SPEC-023 光标处单击）
+ *   MLONG <token>             -> OK | ERR a11y | ERR exec（SPEC-023 光标处长按）
+ *   SCROLL <token> <steps>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-023，-5..5）
  *   PING                      -> PONG
  */
 public class ServerService extends Service {
@@ -51,13 +65,28 @@ public class ServerService extends Service {
     private static final String TAG = "TvRemoteServer";
     public static final int PORT = 8899;
     public static final int DISCOVERY_PORT = 8898;
+    // SPEC-020：内置 Web 遥控页端口（避开 8080/8443 等常见端口，防止被其它应用占用）
+    public static final int WEB_HTTP_PORT = 17880;
+    public static final int WEB_HTTPS_PORT = 17843;
+    private static final String WEB_CERT = "web/web.p12";
+    private static final char[] WEB_PASS = "koco123456".toCharArray();
     private static final String CH_ID = "tvremote";
 
     private ServerSocket server;
     private DatagramSocket udp;
+    private WebServer web;
     private volatile boolean running = true;
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private SharedPreferences sp;
+
+    // SPEC-006：参数上限与配对失败锁定
+    private static final int MAX_PKG_LEN = 128;
+    private static final int MAX_TEXT_CHARS = 256;
+    private static final int MAX_TEXT_B64 = 2048;
+    private static final int PAIR_MAX_FAILS = 5;
+    private static final long PAIR_LOCK_MS = 5 * 60 * 1000L;
+    private final Map<String, Integer> pairFails = new HashMap<>();
+    private final Map<String, Long> pairLockUntil = new HashMap<>();
 
     @Override
     public void onCreate() {
@@ -67,6 +96,7 @@ public class ServerService extends Service {
         startForeground(1, buildNotification(getString(R.string.ntf_running)));
         new Thread(this::serveTcp, "tcp-accept").start();
         new Thread(this::broadcastLoop, "udp-broadcast").start();
+        startWeb();
     }
 
     @Override
@@ -82,7 +112,54 @@ public class ServerService extends Service {
         running = false;
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         try { if (udp != null) udp.close(); } catch (Exception ignored) {}
+        if (web != null) web.stop();
+        TvRemoteAccessibilityService.hideAirCursor();
         super.onDestroy();
+    }
+
+    // ---------------- SPEC-020 Web 服务 ----------------
+
+    private void startWeb() {
+        try {
+            web = new WebServer(WEB_HTTP_PORT, WEB_HTTPS_PORT, this::dispatch,
+                    this::readAsset, buildTls());
+            web.start();
+        } catch (Exception e) {
+            Log.e(TAG, "web start failed", e);
+        }
+    }
+
+    /** 静态资源从 APK 的 assets/web 读取 */
+    private byte[] readAsset(String name) {
+        AssetManager am = getAssets();
+        try (InputStream in = am.open("web/" + name)) {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 自签证书随 APK 发布；证书缺失时仅关闭 HTTPS，HTTP 照常可用 */
+    private SSLServerSocketFactory buildTls() {
+        try {
+            KeyStore ks = KeyStore.getInstance("PKCS12");
+            try (InputStream in = getAssets().open(WEB_CERT)) {
+                ks.load(in, WEB_PASS);
+            }
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(
+                    KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(ks, WEB_PASS);
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(kmf.getKeyManagers(), null, null);
+            return ctx.getServerSocketFactory();
+        } catch (Exception e) {
+            Log.w(TAG, "web tls unavailable: " + e.getMessage());
+            return null;
+        }
     }
 
     // ---------------- 配对 ----------------
@@ -105,6 +182,42 @@ public class ServerService extends Service {
 
     public static String getPairCode(Context c) {
         return c.getSharedPreferences("srv", MODE_PRIVATE).getString("code", "------");
+    }
+
+    // ---------------- SPEC-006 加固辅助 ----------------
+
+    /** 包名只允许字母、数字、点、下划线，长度不超过 128 */
+    private static boolean validPkg(String pkg) {
+        return pkg.length() <= MAX_PKG_LEN && pkg.matches("[A-Za-z0-9._]+");
+    }
+
+    private boolean isPairLocked(String ip) {
+        synchronized (pairLockUntil) {
+            Long until = pairLockUntil.get(ip);
+            if (until == null) return false;
+            if (System.currentTimeMillis() < until) return true;
+            pairLockUntil.remove(ip);
+            pairFails.remove(ip);
+            return false;
+        }
+    }
+
+    private void notePairFail(String ip) {
+        synchronized (pairLockUntil) {
+            int n = pairFails.containsKey(ip) ? pairFails.get(ip) : 0;
+            n++;
+            pairFails.put(ip, n);
+            if (n >= PAIR_MAX_FAILS) {
+                pairLockUntil.put(ip, System.currentTimeMillis() + PAIR_LOCK_MS);
+            }
+        }
+    }
+
+    private void clearPairFail(String ip) {
+        synchronized (pairLockUntil) {
+            pairFails.remove(ip);
+            pairLockUntil.remove(ip);
+        }
     }
 
     // ---------------- TCP ----------------
@@ -130,7 +243,7 @@ public class ServerService extends Service {
             sock.setSoTimeout(30000);
             String line;
             while ((line = in.readLine()) != null) {
-                String resp = dispatch(line.trim());
+                String resp = dispatch(line.trim(), sock.getInetAddress().getHostAddress());
                 out.println(resp);
                 if (resp.startsWith("ERR bye")) break;
             }
@@ -139,7 +252,7 @@ public class ServerService extends Service {
         }
     }
 
-    private String dispatch(String line) {
+    private String dispatch(String line, String peerIp) {
         try {
             if (line.equals("PING")) return "PONG";
 
@@ -148,7 +261,9 @@ public class ServerService extends Service {
 
             if (p[0].equals("PAIR")) {
                 if (p.length < 2) return "ERR arg";
+                if (isPairLocked(peerIp)) return "ERR locked";
                 if (p[1].equals(sp.getString("code", ""))) {
+                    clearPairFail(peerIp);
                     String tok = sp.getString("token", "");
                     if (tok.isEmpty()) {
                         tok = randomToken();
@@ -156,6 +271,7 @@ public class ServerService extends Service {
                     }
                     return "OK " + tok;
                 }
+                notePairFail(peerIp);
                 return "ERR badcode";
             }
 
@@ -196,9 +312,83 @@ public class ServerService extends Service {
                         default: return "ERR exec";
                     }
                 }
+                case "MOVE": {
+                    // SPEC-021/023：相对位移，单轴 -127..127
+                    if (p.length < 3) return "ERR arg";
+                    String[] v = p[2].trim().split("\\s+");
+                    if (v.length != 2) return "ERR arg";
+                    int dx;
+                    int dy;
+                    try {
+                        dx = Integer.parseInt(v[0]);
+                        dy = Integer.parseInt(v[1]);
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    if (Math.abs(dx) > 127 || Math.abs(dy) > 127) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.airMove(dx, dy)) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MTAP": {
+                    // SPEC-023：光标处单击，节点优先、手势兜底
+                    switch (TvRemoteAccessibilityService.airTap()) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MLONG": {
+                    // SPEC-023：光标处长按，节点优先、手势兜底
+                    switch (TvRemoteAccessibilityService.airLongTap()) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "SCROLL": {
+                    // SPEC-023：正数向下/向前，范围 -5..5
+                    if (p.length < 3) return "ERR arg";
+                    int steps;
+                    try {
+                        steps = Integer.parseInt(p[2].trim());
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    if (Math.abs(steps) > 5) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.airScroll(steps)) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MCLICK": {
+                    // SPEC-021：左键按下/抬起，仅接受 0/1
+                    if (p.length < 3) return "ERR arg";
+                    String st = p[2].trim();
+                    if (!st.equals("0") && !st.equals("1")) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.airClick(st.equals("1"))) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MHIDE": {
+                    // SPEC-023：退出触控板时立即隐藏光标，不等 5 秒空闲回收
+                    if (p.length > 2) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.hideAirCursor()) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
                 case "TEXT": {
                     if (p.length < 3) return "ERR arg";
+                    if (p[2].length() > MAX_TEXT_B64) return "ERR toolong";
                     String txt = new String(Base64.decode(p[2], Base64.NO_WRAP), "UTF-8");
+                    if (txt.codePointCount(0, txt.length()) > MAX_TEXT_CHARS) return "ERR toolong";
                     switch (TvRemoteAccessibilityService.text(txt)) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
@@ -207,6 +397,7 @@ public class ServerService extends Service {
                 }
                 case "APP":
                     if (p.length < 3) return "ERR arg";
+                    if (!validPkg(p[2])) return "ERR arg";
                     return launch(p[2]) ? "OK" : "ERR exec";
                 case "LIST":
                     // SPEC-016：返回第三方应用「包名|base64(应用名)」，逗号分隔
