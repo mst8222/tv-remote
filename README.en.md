@@ -427,6 +427,10 @@ Known limitations:
 
 ## Versions
 
+- **v1.6.9**: fixes the information grouping of the box wide-screen layout: the QR code is back
+  in the Address card (it opens exactly that address), while the Pair code card keeps only the
+  code and its hint. The two columns are now equalized in total height with aligned bottom
+  edges, and the QR code stays visible on the first screen.
 - **v1.6.8**: the box UI uses two columns on wide screens (TV / DeX) and the QR code now sits
   in the pairing-code card, enlarged and rendered 1:1 at screen density, so it is scannable on
   the first screen without scrolling. Direct-mode OK on windows that expose no accessibility
