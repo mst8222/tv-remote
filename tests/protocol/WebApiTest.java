@@ -45,7 +45,6 @@ public class WebApiTest {
         tc_app();
         tc_apps();
         tc_icon();
-        tc_move_click();
         tc_touch();
         tc_cors();
         tc_body_limit();
@@ -187,55 +186,101 @@ public class WebApiTest {
                 "未知包应 ERR arg，实际 " + miss.text());
     }
 
-    static void tc_move_click() throws Exception {
-        Res move = req("POST", "/api/move", "{\"dx\":5,\"dy\":-6}", box.token());
-        check("move_ok", move.code == 200 && move.text().contains("\"ok\":true"),
-                "MOVE 应 OK，实际 " + move.text());
-        check("move_record", box.lastDx == 5 && box.lastDy == -6,
-                "服务端应记录 5/-6，实际 " + box.lastDx + "/" + box.lastDy);
-
-        Res range = req("POST", "/api/move", "{\"dx\":128,\"dy\":0}", box.token());
-        check("move_range", range.code == 200 && range.text().contains("arg"),
-                "越界位移应 ERR arg，实际 " + range.text());
-
-        Res down = req("POST", "/api/click", "{\"down\":true}", box.token());
-        check("click_down", down.text().contains("\"ok\":true") && box.mouseDown,
-                "按下应 OK 并记录状态，实际 " + down.text());
-        Res up = req("POST", "/api/click", "{\"down\":false}", box.token());
-        check("click_up", up.text().contains("\"ok\":true") && !box.mouseDown,
-                "抬起应 OK 并清除状态，实际 " + up.text());
-
-        Res bad = req("POST", "/api/click", "{\"down\":\"x\"}", box.token());
-        check("click_arg", bad.text().contains("arg"), "非法 down 应 ERR arg，实际 " + bad.text());
-    }
-
-    /** SPEC-025：网页触控板复用 MTAP/MLONG/SCROLL */
+    /** SPEC-028/029：网页触控板双模式（绝对触摸 tapn/longn/swipen + 鼠标 move/click/tap/long/scroll） */
     static void tc_touch() throws Exception {
         box.resetTouchRecords();
 
-        Res tap = req("POST", "/api/tap", "{}", box.token());
-        check("api_tap_ok", tap.code == 200 && tap.text().contains("\"ok\":true")
-                        && box.tapCount == 1,
-                "/api/tap 应触发 MTAP，实际 " + tap.text() + " count=" + box.tapCount);
+        Res tap = req("POST", "/api/tapn", "{\"x\":2500,\"y\":7500}", box.token());
+        check("api_tapn_ok", tap.code == 200 && tap.text().contains("\"ok\":true")
+                        && box.tapnCount == 1 && box.lastTapNx == 2500 && box.lastTapNy == 7500,
+                "/api/tapn 应触发 MTAPN 2500 7500，实际 " + tap.text()
+                        + " " + box.lastTapNx + "/" + box.lastTapNy);
 
-        Res lng = req("POST", "/api/long", "{}", box.token());
-        check("api_long_ok", lng.code == 200 && lng.text().contains("\"ok\":true")
-                        && box.longTapCount == 1,
-                "/api/long 应触发 MLONG，实际 " + lng.text() + " count=" + box.longTapCount);
+        Res tapArg = req("POST", "/api/tapn", "{\"x\":2500}", box.token());
+        check("api_tapn_arg", tapArg.text().contains("arg"),
+                "缺少 y 应 ERR arg，实际 " + tapArg.text());
+
+        Res tapRange = req("POST", "/api/tapn", "{\"x\":10001,\"y\":0}", box.token());
+        check("api_tapn_range", tapRange.text().contains("arg"),
+                "x 越界应 ERR arg，实际 " + tapRange.text());
+
+        Res lng = req("POST", "/api/longn", "{\"x\":6000,\"y\":4000}", box.token());
+        check("api_longn_ok", lng.code == 200 && lng.text().contains("\"ok\":true")
+                        && box.longnCount == 1 && box.lastLongNx == 6000
+                        && box.lastLongNy == 4000,
+                "/api/longn 应触发 MLONGN 6000 4000，实际 " + lng.text()
+                        + " " + box.lastLongNx + "/" + box.lastLongNy);
+
+        Res lngArg = req("POST", "/api/longn", "{}", box.token());
+        check("api_longn_arg", lngArg.text().contains("arg"),
+                "缺少坐标应 ERR arg，实际 " + lngArg.text());
+
+        Res swipe = req("POST", "/api/swipen",
+                "{\"x1\":5000,\"y1\":8000,\"x2\":5000,\"y2\":2000,\"ms\":300}", box.token());
+        check("api_swipen_ok", swipe.code == 200 && swipe.text().contains("\"ok\":true")
+                        && box.swipeCount == 1 && box.lastSwipeX1 == 5000
+                        && box.lastSwipeY1 == 8000 && box.lastSwipeX2 == 5000
+                        && box.lastSwipeY2 == 2000 && box.lastSwipeMs == 300,
+                "/api/swipen 应触发 MSWIPEN，实际 " + swipe.text());
+
+        Res swipeArg = req("POST", "/api/swipen",
+                "{\"x1\":0,\"y1\":0,\"x2\":100,\"y2\":100}", box.token());
+        check("api_swipen_arg", swipeArg.text().contains("arg"),
+                "缺少 ms 应 ERR arg，实际 " + swipeArg.text());
+
+        Res swipeMs = req("POST", "/api/swipen",
+                "{\"x1\":0,\"y1\":0,\"x2\":100,\"y2\":100,\"ms\":1501}", box.token());
+        check("api_swipen_ms", swipeMs.text().contains("arg"),
+                "ms 越界应 ERR arg，实际 " + swipeMs.text());
+
+        Res move = req("POST", "/api/move", "{\"dx\":5,\"dy\":-6}", box.token());
+        check("api_move_ok", move.code == 200 && move.text().contains("\"ok\":true")
+                        && box.moveCount == 1 && box.lastDx == 5 && box.lastDy == -6,
+                "/api/move 应触发 MOVE 5 -6，实际 " + move.text()
+                        + " " + box.lastDx + "/" + box.lastDy);
+
+        Res moveArg = req("POST", "/api/move", "{\"dx\":5}", box.token());
+        check("api_move_arg", moveArg.text().contains("arg"),
+                "缺少 dy 应 ERR arg，实际 " + moveArg.text());
+
+        Res moveAuth = req("POST", "/api/move", "{\"dx\":1,\"dy\":1}", null);
+        check("api_move_auth", moveAuth.code == 401 && moveAuth.text().contains("auth"),
+                "缺少 token 应 401 auth，实际 " + moveAuth.code);
+
+        Res clickDown = req("POST", "/api/click", "{\"down\":true}", box.token());
+        check("api_click_down", clickDown.code == 200 && box.mouseDown,
+                "/api/click down=true 应按下左键，实际 " + clickDown.text());
+
+        Res clickUp = req("POST", "/api/click", "{\"down\":false}", box.token());
+        check("api_click_up", clickUp.code == 200 && !box.mouseDown,
+                "/api/click down=false 应释放左键，实际 " + clickUp.text());
+
+        Res clickArg = req("POST", "/api/click", "{}", box.token());
+        check("api_click_arg", clickArg.text().contains("arg"),
+                "缺少 down 应 ERR arg，实际 " + clickArg.text());
+
+        Res mtap = req("POST", "/api/tap", "{}", box.token());
+        check("api_tap_ok", mtap.code == 200 && box.tapCount == 1,
+                "/api/tap 应触发 MTAP，实际 " + mtap.text() + " count=" + box.tapCount);
+
+        Res mlong = req("POST", "/api/long", "{}", box.token());
+        check("api_long_ok", mlong.code == 200 && box.longTapCount == 1,
+                "/api/long 应触发 MLONG，实际 " + mlong.text()
+                        + " count=" + box.longTapCount);
 
         Res scroll = req("POST", "/api/scroll", "{\"steps\":3}", box.token());
-        check("api_scroll_ok", scroll.code == 200 && scroll.text().contains("\"ok\":true")
-                        && box.scrollCount == 1 && box.lastScroll == 3,
+        check("api_scroll_ok", scroll.code == 200 && box.scrollCount == 1
+                        && box.lastScroll == 3,
                 "/api/scroll 应触发 SCROLL 3，实际 " + scroll.text()
                         + " steps=" + box.lastScroll);
 
-        Res miss = req("POST", "/api/scroll", "{}", box.token());
-        check("api_scroll_arg", miss.text().contains("arg"),
-                "缺少 steps 应 ERR arg，实际 " + miss.text());
+        Res scrollArg = req("POST", "/api/scroll", "{}", box.token());
+        check("api_scroll_arg", scrollArg.text().contains("arg"),
+                "缺少 steps 应 ERR arg，实际 " + scrollArg.text());
 
-        Res range = req("POST", "/api/scroll", "{\"steps\":6}", box.token());
-        check("api_scroll_range", range.text().contains("arg"),
-                "steps 越界应 ERR arg，实际 " + range.text());
+        Res moveMethod = req("GET", "/api/move", null, box.token());
+        check("api_move_method", moveMethod.code == 405,
+                "GET /api/move 应 405，实际 " + moveMethod.code);
 
         Res hide = req("POST", "/api/hide", "{}", box.token());
         check("api_hide_ok", hide.code == 200 && hide.text().contains("\"ok\":true")
@@ -250,13 +295,13 @@ public class WebApiTest {
         check("api_hide_method", hideMethod.code == 405,
                 "GET /api/hide 应 405，实际 " + hideMethod.code);
 
-        Res auth = req("POST", "/api/tap", "{}", null);
-        check("api_tap_auth", auth.code == 401 && auth.text().contains("auth"),
+        Res auth = req("POST", "/api/tapn", "{\"x\":0,\"y\":0}", null);
+        check("api_tapn_auth", auth.code == 401 && auth.text().contains("auth"),
                 "缺少 token 应 401 auth，实际 " + auth.code + " " + auth.text());
 
-        Res method = req("GET", "/api/tap", null, box.token());
-        check("api_tap_method", method.code == 405,
-                "GET /api/tap 应 405，实际 " + method.code);
+        Res method = req("GET", "/api/tapn", null, box.token());
+        check("api_tapn_method", method.code == 405,
+                "GET /api/tapn 应 405，实际 " + method.code);
     }
 
     /** SPEC-025：跨源访问与 OPTIONS 预检 */

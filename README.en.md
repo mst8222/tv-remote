@@ -69,7 +69,7 @@ pairing and connection mode.
 | Text input | Type on the phone and write into the box's focused field |
 | App shortcuts | Dynamically lists every launchable third-party app with its real box icon; Settings is always first |
 | Air mouse | BT HID mode: tilt the phone to move the box cursor, OK acts as left click |
-| Touchpad | Direct mode: switch the D-pad card to a touchpad, drag to move the cursor, with tap, long-press and two-finger scroll |
+| Touchpad | Direct mode with D-pad / Touch / Mouse segments: Touch maps your finger onto the box screen (tap exactly where you point), Mouse drags the box cursor; pick by box firmware capability |
 | OK long-press | BT mode keeps sending key-down and lets the TV app decide; direct mode sends a long-press command on release after 500 ms |
 | Multi-device | LAN scan, manual add, switch and delete; pairing and connection mode remembered per device |
 | No root | Box side uses the accessibility service, `AudioManager` and `PackageManager` |
@@ -137,13 +137,13 @@ camera opens it and pairs automatically — no address or code to type. After tr
 The web remote also manages multiple boxes: paired boxes are remembered in browser storage and can be
 switched from the device bar at the top. On an HTTPS page, "Scan to add" reads another box's QR code;
 manual address and pair code entry is also available. Any entry can be renamed or deleted. The page
-offers a D-pad / touchpad switch and no longer provides an air mouse.
+offers a D-pad / Touch / Mouse switch and no longer provides an air mouse.
 (Camera scanning needs a secure context; HTTP pages only offer manual add.)
 
-| Client | LAN direct | Bluetooth HID | Cursor control |
+| Client | LAN direct | Bluetooth HID | Touchpad |
 |---|---|---|---|
-| Android native app | Yes (TCP 8899) | Yes (API 28+) | BT gyroscope air mouse / direct touchpad |
-| Browser (Android / iOS / HarmonyOS NEXT / PC) | Yes (17880 / 17843) | Not provided | Direct touchpad |
+| Android native app | Yes (TCP 8899) | Yes (API 28+) | BT gyroscope air mouse; direct-mode Touch / Mouse |
+| Browser (Android / iOS / HarmonyOS NEXT / PC) | Yes (17880 / 17843) | Not provided | Direct-mode Touch / Mouse |
 | Native iOS / HarmonyOS NEXT app | Not provided; use the browser | Not provided | Not provided |
 
 > Browsers have no HID device API, and Web Bluetooth is GATT-client only, so the web page
@@ -253,7 +253,7 @@ Network requirements:
 | D-pad / OK | Uses system DPAD global actions; falls back to focus traversal on firmware that returns false |
 | OK short / long press | In BT mode the box keeps receiving "key down" while held, so TV apps judge long-press themselves; in direct mode a hold of 500 ms or more sends a long-press command on release |
 | Air mouse (↖, top-right) | BT mode only: tilt the phone to move the box cursor, OK acts as left click; tap again to disable |
-| Touchpad (segment above the D-pad) | Direct mode only: drag to move the cursor, tap to click, hold 500 ms to long-press, two-finger swipe to scroll |
+| Touchpad (segments above the D-pad) | Direct mode only, D-pad / Touch / Mouse. Touch: your finger maps to the same box screen position (no cursor); tap to click, hold 500 ms to long-press, single-finger swipe to scroll. Mouse: drag to move the box cursor, tap to click, hold to long-press, two-finger swipe to scroll |
 | Back / Home | System global Back / Home |
 | Menu | Opens recent tasks (no global Menu action without root) |
 | Power | Locks the box screen (not a real power off) |
@@ -265,6 +265,8 @@ Network requirements:
 ## Direct protocol
 
 Box TCP 8899, one command per line terminated by `\n`.
+The touchpad Mouse mode uses `MOVE` / `MCLICK` / `MTAP` / `MLONG` / `SCROLL` (relative cursor);
+Touch mode uses `MTAPN` / `MLONGN` / `MSWIPEN` (absolute coordinates).
 
 | Send | Reply | Meaning |
 |---|---|---|
@@ -281,6 +283,9 @@ Box TCP 8899, one command per line terminated by `\n`.
 | `MTAP <token>` | `OK` / `ERR a11y` | Tap at the cursor (node first, gesture fallback) |
 | `MLONG <token>` | `OK` / `ERR a11y` | Long-press at the cursor |
 | `SCROLL <token> <steps>` | `OK` / `ERR arg` / `ERR a11y` | Two-finger scroll; positive scrolls down, range -5..5 |
+| `MTAPN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` | Absolute tap; x/y are normalized screen coordinates 0..10000 |
+| `MLONGN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` | Absolute long-press; same coordinates as `MTAPN` |
+| `MSWIPEN <token> <x1> <y1> <x2> <y2> <ms>` | `OK` / `ERR arg` / `ERR a11y` | Absolute swipe; coordinates 0..10000, duration 50..1500 ms |
 
 UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds for auto-discovery.
 
@@ -356,6 +361,7 @@ aapt2 → javac → d8 → dex packaging → zipalign → apksigner.
 | "The box could not perform it" | No focused control/input on the current screen; open the target screen first |
 | Scan finds nothing | Same Wi-Fi, box service running, AP isolation off; or add the IP manually |
 | D-pad does nothing | The screen has no focusable element (e.g. full-screen player); some firmware only supports focus traversal |
+| Touchpad taps or swipes do nothing | That firmware does not execute synthetic gestures; switch to Mouse mode and drag the cursor. Both modes require accessibility |
 | Bluetooth keys do nothing | Keep the app in the foreground, tap "BT" again, confirm "Bluetooth connected" |
 | Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
 | Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
@@ -384,8 +390,11 @@ Known limitations:
   node supporting `ACTION_LONG_CLICK`, so apps without long-click support show no effect.
 - Air mouse is available only in the Android app's BT HID mode: the box must accept Bluetooth
   mouse HID reports. Phones without a gyroscope cannot enable it; sensitivity is a fixed constant.
-- The web touchpad drives an app-layer cursor over the direct protocol, requires the box
-  accessibility service, and only affects apps that respond to touch.
+- Both the web and phone touchpads work over the direct protocol only and require the box
+  accessibility service; BT mode offers no touchpad. Touch mode relies on clickable nodes or
+  synthetic gestures: on firmware that does not execute synthetic gestures (measured on H96
+  Android 12), pure-touch surfaces and swipes do nothing, so switch to Mouse mode. Mouse mode
+  relies on the cursor overlay; launchers that only respond to a D-pad still cannot be driven.
 - The web remote needs the box service online. Browsers never receive the UDP broadcast, so a box
   must be added by scanning its QR code or typing its address. Camera scanning works only on
   HTTPS pages (secure context). If the self-signed certificate is not trusted, Chrome offers no
@@ -414,6 +423,13 @@ Known limitations:
 
 ## Versions
 
+- **v1.6.5**: both touchpads now switch between D-pad / Touch / Mouse. Touch maps your finger
+  directly onto the box screen (tap exactly where you point; tap, long-press, single-finger
+  swipe), while Mouse drags the box cursor (tap to click, hold to long-press, two-finger scroll),
+  covering firmware without absolute touch. Fixed taps landing at the wrong position after the box
+  resolution is overridden (screen size was read from the wrong metrics). Switching mode, device
+  or leaving the page now hides the cursor and releases any pressed button immediately.
+  Note: the touchpad is direct-mode only; BT mode does not provide it.
 - **v1.6.0**: the web remote manages multiple boxes (remember paired boxes, switch, scan or add
   manually, rename, delete); the web page gains a D-pad / touchpad switch and drops the air mouse;
   both clients now stretch the touchpad to the full card width, matching the button rows; the web

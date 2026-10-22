@@ -31,9 +31,12 @@
       cancel: '取消',
       invalidAddr: '地址格式不正确',
       modeDpad: '方向盘',
-      modePad: '触控板',
-      padTip1: '拖动移动光标 · 点按确定',
-      padTip2: '长按菜单 · 双指滑动滚动',
+      modeTouch: '触摸',
+      modeMouse: '鼠标',
+      touchPadTip1: '点按对应位置 · 长按菜单',
+      touchPadTip2: '上下滑动列表',
+      mousePadTip1: '拖动移动光标 · 点按单击',
+      mousePadTip2: '按住长按 · 双指滚动',
       offlineTitle: '未连接到盒子',
       offlineMsg: '请确认盒子已开机并与本机在同一局域网。也可以改用 Android 手机端 App 的蓝牙模式，或使用 2.4G 遥控器。',
       retry: '重试连接',
@@ -85,9 +88,12 @@
       cancel: 'Cancel',
       invalidAddr: 'Invalid address',
       modeDpad: 'D-pad',
-      modePad: 'Touchpad',
-      padTip1: 'Drag to move · tap to confirm',
-      padTip2: 'Long-press menu · two-finger scroll',
+      modeTouch: 'Touch',
+      modeMouse: 'Mouse',
+      touchPadTip1: 'Tap where you point · long-press for menu',
+      touchPadTip2: 'Swipe up or down to scroll',
+      mousePadTip1: 'Drag to move cursor · tap to click',
+      mousePadTip2: 'Hold to long-press · two-finger scroll',
       offlineTitle: 'Not connected to the box',
       offlineMsg: 'Make sure the box is on and on the same network. You can also use the Bluetooth mode in the Android app, or a 2.4G remote.',
       retry: 'Retry',
@@ -124,10 +130,13 @@
   var LEGACY_TOKEN_KEY = 'tvremoteweb_token';
 
   var DRAG_THRESHOLD = 8;
-  var MOVE_GAIN = 1.5;
-  var SCROLL_UNIT = 24;
-  var SCROLL_INTERVAL = 100;
   var LONG_PRESS_MS = 500;
+  /* 鼠标模式：相对位移增益、20ms 合并、滚动一格 24px、单次最多 5 格、最小间隔 100ms */
+  var MOVE_GAIN = 1.5;
+  var MOVE_FLUSH_MS = 20;
+  var SCROLL_UNIT = 24;
+  var SCROLL_STEP_MAX = 5;
+  var SCROLL_INTERVAL = 100;
 
   var $ = function (s) { return document.querySelector(s); };
   var toastTimer = null;
@@ -386,7 +395,8 @@
     showMain();
     updateDevBar();
     ping();
-    if (padOn()) enqueueCmd('/api/move', { dx: 0, dy: 0 });
+    // 切设备后按当前模式重置光标（鼠标模式重新显示，其余模式隐藏）
+    setPadMode(inputMode(), false);
   }
 
   function removeDevice(base) {
@@ -742,12 +752,29 @@
     });
   }
 
-  // ---------------- 触控板（SPEC-025） ----------------
+  // ---------------- 触控板（SPEC-028 触摸 / SPEC-029 鼠标） ----------------
 
   var padEl = null;
+  /* 'touch'：绝对坐标点按；'mouse'：相对移动光标 */
+  var padMode = 'touch';
+  /* 触摸模式状态：单指绝对坐标 */
   var pad = {
-    pointers: {},
     active: false,
+    pointerId: null,
+    downX: 0,
+    downY: 0,
+    downNx: 0,
+    downNy: 0,
+    lastX: 0,
+    lastY: 0,
+    downAt: 0,
+    moved: false,
+    longFired: false,
+    longTimer: null
+  };
+  /* 鼠标模式状态：沿用 SPEC-025 的相对位移、左键、长按与双指滚动 */
+  var mouse = {
+    pointers: {},
     lastX: 0,
     lastY: 0,
     moved: 0,
@@ -759,6 +786,9 @@
     scrollAcc: 0,
     lastScrollAt: 0
   };
+  var pendX = 0;
+  var pendY = 0;
+  var moveTimer = null;
 
   /* 触控命令串行发送，保证「按下 -> 移动 -> 抬起」的顺序 */
   var cmdQueue = [];
@@ -786,14 +816,107 @@
     }, function (e) {
       cmdBusy = false;
       cmdQueue.length = 0;
-      pad.pressed = false;
+      resetPad();
       if (!e || !e.auth) setOnline(false);
     });
   }
 
-  var pendX = 0;
-  var pendY = 0;
-  var moveTimer = null;
+  /** 触控板内任意位置换算成盒子屏幕的归一化坐标（0..10000） */
+  function padPoint(clientX, clientY) {
+    var r = padEl.getBoundingClientRect();
+    var x = clamp(Math.round((clientX - r.left) * 10000 / Math.max(1, r.width)), 0, 10000);
+    var y = clamp(Math.round((clientY - r.top) * 10000 / Math.max(1, r.height)), 0, 10000);
+    return { x: x, y: y };
+  }
+
+  function resetPad() {
+    if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
+    pad.active = false;
+    pad.pointerId = null;
+    pad.moved = false;
+    pad.longFired = false;
+    // 鼠标模式只清状态，不在这里发命令：错误回调也会调用 resetPad，避免递归
+    if (mouse.longTimer) { clearTimeout(mouse.longTimer); mouse.longTimer = null; }
+    if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
+    pendX = 0;
+    pendY = 0;
+    mouse.pressed = false;
+    mouse.pointers = {};
+    mouse.scrolling = false;
+    mouse.longPending = false;
+    mouse.moved = 0;
+  }
+
+  /** 鼠标模式主动释放左键（切模式、页面隐藏时调用） */
+  function releaseMouse() {
+    flushMove();
+    if (mouse.pressed) {
+      mouse.pressed = false;
+      enqueueCmd('/api/click', { down: false });
+    }
+  }
+
+  // ---- 触摸模式：绝对坐标 ----
+
+  function touchDown(e) {
+    if (pad.active) {
+      // 第二根手指落下：取消本次手势，不发命令
+      resetPad();
+      return;
+    }
+    try { padEl.setPointerCapture(e.pointerId); } catch (err) {}
+    var p = padPoint(e.clientX, e.clientY);
+    pad.active = true;
+    pad.pointerId = e.pointerId;
+    pad.downX = pad.lastX = e.clientX;
+    pad.downY = pad.lastY = e.clientY;
+    pad.downNx = p.x;
+    pad.downNy = p.y;
+    pad.downAt = Date.now();
+    pad.moved = false;
+    pad.longFired = false;
+    pad.longTimer = setTimeout(function () {
+      pad.longTimer = null;
+      if (!pad.active || pad.moved) return;
+      pad.longFired = true;
+      enqueueCmd('/api/longn', { x: pad.downNx, y: pad.downNy });
+    }, LONG_PRESS_MS);
+  }
+
+  function touchMove(e) {
+    if (!pad.active || e.pointerId !== pad.pointerId) return;
+    pad.lastX = e.clientX;
+    pad.lastY = e.clientY;
+    if (!pad.moved
+        && Math.hypot(pad.lastX - pad.downX, pad.lastY - pad.downY) > DRAG_THRESHOLD) {
+      pad.moved = true;
+      if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
+    }
+  }
+
+  function touchUp(e) {
+    if (!pad.active || e.pointerId !== pad.pointerId) return;
+    try { padEl.releasePointerCapture(e.pointerId); } catch (err) {}
+    if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
+    if (!pad.longFired) {
+      if (pad.moved) {
+        var a = padPoint(pad.downX, pad.downY);
+        var b = padPoint(pad.lastX, pad.lastY);
+        var ms = clamp(Date.now() - pad.downAt, 50, 1500);
+        enqueueCmd('/api/swipen', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, ms: ms });
+      } else {
+        enqueueCmd('/api/tapn', { x: pad.downNx, y: pad.downNy });
+      }
+    }
+    resetPad();
+  }
+
+  function touchCancel(e) {
+    if (e.pointerId !== pad.pointerId) return;
+    resetPad();
+  }
+
+  // ---- 鼠标模式：相对位移 ----
 
   function queueMove(dx, dy) {
     pendX += dx;
@@ -802,7 +925,7 @@
     moveTimer = setTimeout(function () {
       moveTimer = null;
       flushMove();
-    }, 20);
+    }, MOVE_FLUSH_MS);
   }
 
   function flushMove() {
@@ -810,10 +933,10 @@
       clearTimeout(moveTimer);
       moveTimer = null;
     }
-    var dx = pendX;
-    var dy = pendY;
-    pendX = 0;
-    pendY = 0;
+    var dx = Math.round(pendX);
+    var dy = Math.round(pendY);
+    pendX -= dx;
+    pendY -= dy;
     while (dx !== 0 || dy !== 0) {
       var sx = clamp(dx, -127, 127);
       var sy = clamp(dy, -127, 127);
@@ -823,144 +946,154 @@
     }
   }
 
-  function resetPad() {
-    if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
-    if (moveTimer) { clearTimeout(moveTimer); moveTimer = null; }
-    pendX = 0;
-    pendY = 0;
-    if (pad.pressed) {
-      pad.pressed = false;
-      enqueueCmd('/api/click', { down: false });
-    }
-    pad.pointers = {};
-    pad.active = false;
-    pad.scrolling = false;
-    pad.longPending = false;
-    pad.moved = 0;
-  }
-
   function pointerCount() {
-    return Object.keys(pad.pointers).length;
+    var n = 0;
+    for (var id in mouse.pointers) {
+      if (Object.prototype.hasOwnProperty.call(mouse.pointers, id)) n++;
+    }
+    return n;
   }
 
   function avgY() {
     var sum = 0;
     var n = 0;
-    for (var id in pad.pointers) {
-      if (Object.prototype.hasOwnProperty.call(pad.pointers, id)) {
-        sum += pad.pointers[id].y;
+    for (var id in mouse.pointers) {
+      if (Object.prototype.hasOwnProperty.call(mouse.pointers, id)) {
+        sum += mouse.pointers[id].y;
         n++;
       }
     }
     return n ? sum / n : 0;
   }
 
-  function onPadDown(e) {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    e.preventDefault();
+  function mouseDown(e) {
     try { padEl.setPointerCapture(e.pointerId); } catch (err) {}
-    pad.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    mouse.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
     var n = pointerCount();
 
     if (n === 1) {
-      pad.active = true;
-      pad.lastX = e.clientX;
-      pad.lastY = e.clientY;
-      pad.moved = 0;
-      pad.longPending = false;
-      pad.pressed = false;
-      pad.scrolling = false;
-      if (pad.longTimer) clearTimeout(pad.longTimer);
-      pad.longTimer = setTimeout(function () {
-        pad.longTimer = null;
-        pad.longPending = true;
+      mouse.lastX = e.clientX;
+      mouse.lastY = e.clientY;
+      mouse.moved = 0;
+      mouse.longPending = false;
+      mouse.pressed = false;
+      mouse.scrolling = false;
+      if (mouse.longTimer) clearTimeout(mouse.longTimer);
+      mouse.longTimer = setTimeout(function () {
+        mouse.longTimer = null;
+        mouse.longPending = true;
       }, LONG_PRESS_MS);
       flushMove();
     } else if (n === 2) {
-      if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
-      if (pad.pressed) {
-        pad.pressed = false;
+      if (mouse.longTimer) { clearTimeout(mouse.longTimer); mouse.longTimer = null; }
+      if (mouse.pressed) {
+        mouse.pressed = false;
         flushMove();
         enqueueCmd('/api/click', { down: false });
       }
-      pad.longPending = false;
-      pad.scrolling = true;
-      pad.scrollStartY = avgY();
-      pad.scrollAcc = 0;
-      pad.lastScrollAt = 0;
+      mouse.longPending = false;
+      mouse.scrolling = true;
+      mouse.scrollStartY = avgY();
+      mouse.scrollAcc = 0;
+      mouse.lastScrollAt = 0;
     }
   }
 
-  function onPadMove(e) {
-    var p = pad.pointers[e.pointerId];
+  function mouseMove(e) {
+    var p = mouse.pointers[e.pointerId];
     if (!p) return;
-    e.preventDefault();
     p.x = e.clientX;
     p.y = e.clientY;
 
-    if (pad.scrolling) {
+    if (mouse.scrolling) {
       handleScroll();
       return;
     }
     if (pointerCount() !== 1) return;
 
-    var dx = e.clientX - pad.lastX;
-    var dy = e.clientY - pad.lastY;
-    pad.lastX = e.clientX;
-    pad.lastY = e.clientY;
-    pad.moved += Math.abs(dx) + Math.abs(dy);
-    if (pad.moved <= DRAG_THRESHOLD) return;
+    var dx = e.clientX - mouse.lastX;
+    var dy = e.clientY - mouse.lastY;
+    mouse.lastX = e.clientX;
+    mouse.lastY = e.clientY;
+    mouse.moved += Math.abs(dx) + Math.abs(dy);
+    if (mouse.moved <= DRAG_THRESHOLD) return;
 
-    if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
-    if (!pad.pressed) {
+    if (mouse.longTimer) { clearTimeout(mouse.longTimer); mouse.longTimer = null; }
+    if (!mouse.pressed) {
       flushMove();
-      pad.pressed = true;
+      mouse.pressed = true;
       enqueueCmd('/api/click', { down: true });
     }
     queueMove(Math.round(dx * MOVE_GAIN), Math.round(dy * MOVE_GAIN));
   }
 
-  function onPadUp(e) {
-    if (!pad.pointers[e.pointerId]) return;
-    e.preventDefault();
+  function mouseUp(e) {
+    if (!mouse.pointers[e.pointerId]) return;
     try { padEl.releasePointerCapture(e.pointerId); } catch (err) {}
-    delete pad.pointers[e.pointerId];
+    delete mouse.pointers[e.pointerId];
 
-    if (pad.scrolling) {
-      if (pointerCount() < 2) pad.scrolling = false;
-      pad.scrollAcc = 0;
+    if (mouse.scrolling) {
+      if (pointerCount() < 2) mouse.scrolling = false;
+      mouse.scrollAcc = 0;
       return;
     }
     if (pointerCount() > 0) return;
 
-    pad.active = false;
-    if (pad.longTimer) { clearTimeout(pad.longTimer); pad.longTimer = null; }
+    if (mouse.longTimer) { clearTimeout(mouse.longTimer); mouse.longTimer = null; }
     flushMove();
-    if (pad.pressed) {
-      pad.pressed = false;
+    if (mouse.pressed) {
+      mouse.pressed = false;
       enqueueCmd('/api/click', { down: false });
-    } else if (pad.longPending) {
+    } else if (mouse.longPending) {
       enqueueCmd('/api/long', {});
-    } else if (pad.moved <= DRAG_THRESHOLD) {
+    } else if (mouse.moved <= DRAG_THRESHOLD) {
       enqueueCmd('/api/tap', {});
     }
-    pad.longPending = false;
-    pad.moved = 0;
+    mouse.longPending = false;
+    mouse.moved = 0;
   }
 
   function handleScroll() {
     var y = avgY();
-    pad.scrollAcc += y - pad.scrollStartY;
-    pad.scrollStartY = y;
-    var steps = Math.trunc(pad.scrollAcc / SCROLL_UNIT);
+    mouse.scrollAcc += y - mouse.scrollStartY;
+    mouse.scrollStartY = y;
+    var steps = Math.trunc(mouse.scrollAcc / SCROLL_UNIT);
     if (steps === 0) return;
     var now = Date.now();
-    if (now - pad.lastScrollAt < SCROLL_INTERVAL) return;
-    pad.scrollAcc -= steps * SCROLL_UNIT;
-    pad.lastScrollAt = now;
-    var s = clamp(steps, -5, 5);
+    if (now - mouse.lastScrollAt < SCROLL_INTERVAL) return;
+    mouse.scrollAcc -= steps * SCROLL_UNIT;
+    mouse.lastScrollAt = now;
+    var s = clamp(steps, -SCROLL_STEP_MAX, SCROLL_STEP_MAX);
     if (s === 0) return;
     enqueueCmd('/api/scroll', { steps: s });
+  }
+
+  // ---- 事件分发 ----
+
+  function onPadDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    if (padMode === 'mouse') mouseDown(e); else touchDown(e);
+  }
+
+  function onPadMove(e) {
+    e.preventDefault();
+    if (padMode === 'mouse') mouseMove(e); else touchMove(e);
+  }
+
+  function onPadUp(e) {
+    e.preventDefault();
+    if (padMode === 'mouse') mouseUp(e); else touchUp(e);
+  }
+
+  function onPadCancel(e) {
+    if (padMode === 'mouse') {
+      delete mouse.pointers[e.pointerId];
+      releaseMouse();
+      resetPad();
+    } else {
+      touchCancel(e);
+    }
   }
 
   function bindPad() {
@@ -968,28 +1101,41 @@
     padEl.addEventListener('pointerdown', onPadDown);
     padEl.addEventListener('pointermove', onPadMove);
     padEl.addEventListener('pointerup', onPadUp);
-    padEl.addEventListener('pointercancel', onPadUp);
+    padEl.addEventListener('pointercancel', onPadCancel);
   }
 
-  function padOn() {
-    return lsGet(INPUT_KEY) === 'touchpad';
-  }
-
-  function setPadMode(on, persist) {
-    var wasPad = !$('#touchpad').hidden;
-    resetPad();
-    $('#dpad').hidden = on;
-    $('#touchpad').hidden = !on;
-    $('#segDpad').classList.toggle('on', !on);
-    $('#segPad').classList.toggle('on', on);
-    if (persist) lsSet(INPUT_KEY, on ? 'touchpad' : 'dpad');
-    if (on) {
-      // 让盒子显示光标并校验无障碍状态
-      enqueueCmd('/api/move', { dx: 0, dy: 0 });
-    } else if (wasPad) {
-      // 切回方向盘立即隐藏盒端光标，不等 5 秒空闲回收
-      enqueueCmd('/api/hide');
+  /** 读取输入模式并迁移旧值 touchpad -> touch */
+  function inputMode() {
+    var v = lsGet(INPUT_KEY);
+    if (v === 'touchpad') {
+      v = 'touch';
+      lsSet(INPUT_KEY, v);
     }
+    return (v === 'touch' || v === 'mouse') ? v : 'dpad';
+  }
+
+  /** 按当前模式设置触控板提示文案 */
+  function updatePadTips() {
+    $('#padTip1').textContent = t(padMode === 'mouse' ? 'mousePadTip1' : 'touchPadTip1');
+    $('#padTip2').textContent = t(padMode === 'mouse' ? 'mousePadTip2' : 'touchPadTip2');
+  }
+
+  /** 切换输入模式：'dpad' / 'touch' / 'mouse'；persist=true 时写入本地 */
+  function setPadMode(mode, persist) {
+    releaseMouse();
+    resetPad();
+    padMode = mode === 'mouse' ? 'mouse' : 'touch';
+    var isDpad = mode === 'dpad';
+    $('#dpad').hidden = !isDpad;
+    $('#touchpad').hidden = isDpad;
+    $('#segDpad').classList.toggle('on', isDpad);
+    $('#segPad').classList.toggle('on', mode === 'touch');
+    $('#segMouse').classList.toggle('on', mode === 'mouse');
+    if (persist) lsSet(INPUT_KEY, isDpad ? 'dpad' : padMode);
+    updatePadTips();
+    // 先清理可能残留的光标；鼠标模式随后让盒端按上次位置重建光标
+    enqueueCmd('/api/hide');
+    if (mode === 'mouse') enqueueCmd('/api/move', { dx: 0, dy: 0 });
   }
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -1011,8 +1157,9 @@
     $('#code').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') doPair();
     });
-    $('#segDpad').addEventListener('click', function () { setPadMode(false, true); });
-    $('#segPad').addEventListener('click', function () { setPadMode(true, true); });
+    $('#segDpad').addEventListener('click', function () { setPadMode('dpad', true); });
+    $('#segPad').addEventListener('click', function () { setPadMode('touch', true); });
+    $('#segMouse').addEventListener('click', function () { setPadMode('mouse', true); });
     $('#sendBtn').addEventListener('click', function () {
       var el = $('#text');
       var v = el.value;
@@ -1026,7 +1173,11 @@
     });
     $('#retryBtn').addEventListener('click', ping);
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) resetPad();
+      if (document.hidden) {
+        releaseMouse();
+        resetPad();
+        enqueueCmd('/api/hide');
+      }
     });
     window.addEventListener('offline', function () { setOnline(false); });
     bindKeys();
@@ -1039,7 +1190,7 @@
     applyI18n();
     setupScannerUI();
     bind();
-    setPadMode(padOn(), false);
+    setPadMode(inputMode(), false);
     renderDevices();
 
     if (!window.isSecureContext) {

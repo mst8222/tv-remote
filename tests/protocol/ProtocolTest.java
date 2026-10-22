@@ -85,6 +85,9 @@ public class ProtocolTest {
         tc_mclick();
         tc_scroll();
         tc_mhide();
+        tc_mtapn();
+        tc_mlongn();
+        tc_mswipen();
         tc_touch_session();
         tc_a11y_off();
         tc_unknown_cmd();
@@ -641,27 +644,118 @@ public class ProtocolTest {
         }
     }
 
-    /** SPEC-023：TouchSession 单连接内连续移动 + 点击 + 滚动全部到达 */
+    /** SPEC-028：绝对点按，归一化坐标 0..10000 */
+    static void tc_mtapn() throws Exception {
+        box.resetTouchRecords();
+        eq("mtapn_ok", "OK", rawCmd("MTAPN " + box.token() + " 2500 7500"));
+        check("mtapn_record", box.tapnCount == 1 && box.lastTapNx == 2500
+                        && box.lastTapNy == 7500,
+                "应记录 MTAPN 2500 7500，实际 " + box.tapnCount + "/"
+                        + box.lastTapNx + "/" + box.lastTapNy);
+        eq("mtapn_zero_ok", "OK", rawCmd("MTAPN " + box.token() + " 0 0"));
+        eq("mtapn_max_ok", "OK", rawCmd("MTAPN " + box.token() + " 10000 10000"));
+        eq("mtapn_missing", "ERR arg", rawCmd("MTAPN " + box.token()));
+        eq("mtapn_one_arg", "ERR arg", rawCmd("MTAPN " + box.token() + " 100"));
+        eq("mtapn_non_numeric", "ERR arg", rawCmd("MTAPN " + box.token() + " a b"));
+        eq("mtapn_under", "ERR arg", rawCmd("MTAPN " + box.token() + " -1 0"));
+        eq("mtapn_over", "ERR arg", rawCmd("MTAPN " + box.token() + " 0 10001"));
+        eq("mtapn_wrong_token", "ERR auth", rawCmd("MTAPN deadbeef 0 0"));
+        box.a11yEnabled = false;
+        try {
+            eq("mtapn_a11y_off", "ERR a11y", rawCmd("MTAPN " + box.token() + " 0 0"));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-028：绝对长按，归一化坐标 0..10000 */
+    static void tc_mlongn() throws Exception {
+        box.resetTouchRecords();
+        eq("mlongn_ok", "OK", rawCmd("MLONGN " + box.token() + " 6000 4000"));
+        check("mlongn_record", box.longnCount == 1 && box.lastLongNx == 6000
+                        && box.lastLongNy == 4000,
+                "应记录 MLONGN 6000 4000，实际 " + box.longnCount + "/"
+                        + box.lastLongNx + "/" + box.lastLongNy);
+        eq("mlongn_missing", "ERR arg", rawCmd("MLONGN " + box.token()));
+        eq("mlongn_one_arg", "ERR arg", rawCmd("MLONGN " + box.token() + " 1"));
+        eq("mlongn_non_numeric", "ERR arg", rawCmd("MLONGN " + box.token() + " x y"));
+        eq("mlongn_over", "ERR arg", rawCmd("MLONGN " + box.token() + " 10001 0"));
+        eq("mlongn_wrong_token", "ERR auth", rawCmd("MLONGN deadbeef 0 0"));
+        box.a11yEnabled = false;
+        try {
+            eq("mlongn_a11y_off", "ERR a11y", rawCmd("MLONGN " + box.token() + " 0 0"));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-028：绝对滑动，归一化坐标 + 时长 50..1500ms */
+    static void tc_mswipen() throws Exception {
+        box.resetTouchRecords();
+        eq("mswipen_ok", "OK",
+                rawCmd("MSWIPEN " + box.token() + " 5000 8000 5000 2000 300"));
+        check("mswipen_record", box.swipeCount == 1
+                        && box.lastSwipeX1 == 5000 && box.lastSwipeY1 == 8000
+                        && box.lastSwipeX2 == 5000 && box.lastSwipeY2 == 2000
+                        && box.lastSwipeMs == 300,
+                "应记录 MSWIPEN 5000 8000 5000 2000 300，实际 " + box.swipeCount + "/"
+                        + box.lastSwipeX1 + "/" + box.lastSwipeY1 + "/"
+                        + box.lastSwipeX2 + "/" + box.lastSwipeY2 + "/" + box.lastSwipeMs);
+        eq("mswipen_missing", "ERR arg", rawCmd("MSWIPEN " + box.token()));
+        eq("mswipen_four_args", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " 0 0 100 100"));
+        eq("mswipen_non_numeric", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " a 0 1 2 300"));
+        eq("mswipen_coord_over", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " 0 0 10001 0 300"));
+        eq("mswipen_coord_under", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " 0 0 0 -1 300"));
+        eq("mswipen_ms_under", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " 0 0 100 100 49"));
+        eq("mswipen_ms_over", "ERR arg",
+                rawCmd("MSWIPEN " + box.token() + " 0 0 100 100 1501"));
+        eq("mswipen_wrong_token", "ERR auth",
+                rawCmd("MSWIPEN deadbeef 0 0 100 100 300"));
+        box.a11yEnabled = false;
+        try {
+            eq("mswipen_a11y_off", "ERR a11y",
+                    rawCmd("MSWIPEN " + box.token() + " 0 0 100 100 300"));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-028：TouchSession 单连接内连续点按 + 长按 + 滑动全部按序到达 */
     static void tc_touch_session() throws Exception {
         box.resetTouchRecords();
         int before = box.connectionCount;
         TouchSession ts = new TouchSession("127.0.0.1", box.port(), box.token(), null);
         try {
-            ts.move(200, -150); // 超过 127，应分批发送，不丢位移
-            ts.move(10, 10);
-            ts.tap();
-            ts.scroll(2);
+            ts.tapAt(1200, 3400);
+            ts.longAt(5600, 7800);
+            ts.swipe(100, 200, 300, 900, 240);
+            ts.hide();
             long end = System.currentTimeMillis() + 3000;
             while (System.currentTimeMillis() < end
-                    && (box.moveCount < 2 || box.tapCount < 1 || box.scrollCount < 1)) {
+                    && (box.tapnCount < 1 || box.longnCount < 1
+                    || box.swipeCount < 1 || box.hideCount < 1)) {
                 Thread.sleep(20);
             }
-            check("touch_session_move", box.moveCount >= 2,
-                    "分批移动应至少发送 2 条 MOVE，实际 " + box.moveCount);
-            check("touch_session_tap", box.tapCount == 1,
-                    "应到达一次 MTAP，实际 " + box.tapCount);
-            check("touch_session_scroll", box.scrollCount == 1 && box.lastScroll == 2,
-                    "应到达一次 SCROLL 2，实际 " + box.scrollCount + "/" + box.lastScroll);
+            check("touch_session_tapn", box.tapnCount == 1
+                            && box.lastTapNx == 1200 && box.lastTapNy == 3400,
+                    "应到达 MTAPN 1200 3400，实际 " + box.lastTapNx + "/" + box.lastTapNy);
+            check("touch_session_longn", box.longnCount == 1
+                            && box.lastLongNx == 5600 && box.lastLongNy == 7800,
+                    "应到达 MLONGN 5600 7800，实际 " + box.lastLongNx + "/" + box.lastLongNy);
+            check("touch_session_swipen", box.swipeCount == 1
+                            && box.lastSwipeX1 == 100 && box.lastSwipeY1 == 200
+                            && box.lastSwipeX2 == 300 && box.lastSwipeY2 == 900
+                            && box.lastSwipeMs == 240,
+                    "应到达 MSWIPEN 100 200 300 900 240，实际 " + box.lastSwipeX1 + "/"
+                            + box.lastSwipeY1 + "/" + box.lastSwipeX2 + "/"
+                            + box.lastSwipeY2 + "/" + box.lastSwipeMs);
+            check("touch_session_hide", box.hideCount == 1,
+                    "应到达一次 MHIDE，实际 " + box.hideCount);
             check("touch_session_single_conn", box.connectionCount - before == 1,
                     "同一会话应只建立 1 条连接，实际 " + (box.connectionCount - before));
         } finally {

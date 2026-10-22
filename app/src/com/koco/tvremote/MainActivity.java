@@ -117,14 +117,21 @@ public class MainActivity extends Activity {
     private LinearLayout column;
     private View appsCard;
 
-    // SPEC-023：输入方式（方向盘 / 触控板）
+    // SPEC-023/029：输入方式（方向盘 / 触摸 / 鼠标）
+    private static final String INPUT_DPAD = "dpad";
+    private static final String INPUT_TOUCH = "touch";
+    private static final String INPUT_MOUSE = "mouse";
+
     private final Handler ui = new Handler(Looper.getMainLooper());
+    /** 处于触控板（触摸或鼠标）时为 true */
     private boolean inputTouchpad = false;
+    /** 触控板为鼠标模式（相对移动光标）时为 true */
+    private boolean inputMouse = false;
     /** 方向盘与触控板共用的正方形边长（像素） */
     private int inputD;
     private View dpadDisc;
     private TouchPadView touchpadView;
-    private TextView inputDpad, inputTouchpadBtn;
+    private TextView inputDpad, inputTouchBtn, inputMouseBtn;
     /** 触控板专用直连长连接；蓝牙模式为 null */
     private TouchSession touchSession;
 
@@ -194,8 +201,8 @@ public class MainActivity extends Activity {
         updateModeUi();
         // SPEC-015：恢复当前设备上次成功使用的连接方式（新设备默认直连）
         applyDeviceMode();
-        // SPEC-023：恢复输入方式（方向盘 / 触控板）
-        setInputMode("touchpad".equals(sp.getString("input", "dpad")));
+        // SPEC-023/029：恢复输入方式（方向盘 / 触摸 / 鼠标）
+        setInputMode(savedInputMode());
         // SPEC-027：每次启动后台静默探测更新，有新版本时点亮顶栏标签
         autoCheckUpdate();
     }
@@ -515,7 +522,7 @@ public class MainActivity extends Activity {
         return box;
     }
 
-    /** SPEC-023：方向盘 / 触控板分段切换（与大圆盘同宽区域内居中） */
+    /** SPEC-029：方向盘 / 触摸 / 鼠标三段切换（与大圆盘同宽区域内居中） */
     private View buildInputToggle() {
         LinearLayout seg = new LinearLayout(this);
         seg.setOrientation(LinearLayout.HORIZONTAL);
@@ -523,122 +530,120 @@ public class MainActivity extends Activity {
         seg.setPadding(dp(3), dp(3), dp(3), dp(3));
 
         inputDpad = segBtn(getString(R.string.input_dpad));
-        inputDpad.setOnClickListener(v -> setInputMode(false));
-        inputTouchpadBtn = segBtn(getString(R.string.input_touchpad));
-        inputTouchpadBtn.setOnClickListener(v -> setInputMode(true));
+        inputDpad.setOnClickListener(v -> setInputMode(INPUT_DPAD));
+        inputTouchBtn = segBtn(getString(R.string.input_touch));
+        inputTouchBtn.setOnClickListener(v -> setInputMode(INPUT_TOUCH));
+        inputMouseBtn = segBtn(getString(R.string.input_mouse));
+        inputMouseBtn.setOnClickListener(v -> setInputMode(INPUT_MOUSE));
 
         LinearLayout.LayoutParams p1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
         p1.rightMargin = dp(3);
+        LinearLayout.LayoutParams p2 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        p2.rightMargin = dp(3);
         seg.addView(inputDpad, p1);
-        seg.addView(inputTouchpadBtn, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        seg.addView(inputTouchBtn, p2);
+        seg.addView(inputMouseBtn, new LinearLayout.LayoutParams(0, dp(34), 1f));
 
         LinearLayout wrap = row();
         wrap.setGravity(Gravity.CENTER_HORIZONTAL);
         wrap.addView(seg, new LinearLayout.LayoutParams(
-                compact ? dp(160) : tablet ? dp(240) : dp(200), dp(40)));
+                compact ? dp(190) : tablet ? dp(260) : dp(230), dp(40)));
         return wrap;
     }
 
     private TouchPadView buildTouchpad() {
-        TouchPadView v = new TouchPadView(this, inputSink, 500, 100);
+        TouchPadView v = new TouchPadView(this, inputSink);
         v.setHintLines(getString(R.string.touchpad_hint_top),
                 getString(R.string.touchpad_hint_bottom));
         v.setVisibility(View.GONE);
         return v;
     }
 
-    /** 触控板手势出口：按当前连接方式分发，点击时再取模式，避免构建期绑定 */
+    /** 触控板手势出口：两种模式都只走直连长连接，蓝牙模式不可用 */
     private final TouchPadView.Sink inputSink = new TouchPadView.Sink() {
         @Override
+        public void tap(int x, int y) {
+            if (touchSession != null) touchSession.tapAt(x, y);
+            else touchpadNoChannel();
+        }
+
+        @Override
+        public void longPress(int x, int y) {
+            if (touchSession != null) touchSession.longAt(x, y);
+            else touchpadNoChannel();
+        }
+
+        @Override
+        public void swipe(int x1, int y1, int x2, int y2, long ms) {
+            if (touchSession != null) touchSession.swipe(x1, y1, x2, y2, ms);
+            else touchpadNoChannel();
+        }
+
+        @Override
         public void move(int dx, int dy) {
-            if (btMode) {
-                if (bt != null) bt.sendMouseMove(dx, dy, 127);
-            } else if (touchSession != null) {
-                touchSession.move(dx, dy);
-            }
+            if (touchSession != null) touchSession.move(dx, dy);
         }
 
         @Override
         public void tap() {
-            if (btMode) {
-                tapBt();
-            } else if (touchSession != null) {
-                touchSession.tap();
-            } else {
-                touchpadNoChannel();
-            }
+            if (touchSession != null) touchSession.tap();
+            else touchpadNoChannel();
         }
 
         @Override
         public void longTap() {
-            if (btMode) {
-                tapBt();
-            } else if (touchSession != null) {
-                touchSession.longTap();
-            } else {
-                touchpadNoChannel();
-            }
+            if (touchSession != null) touchSession.longTap();
+            else touchpadNoChannel();
         }
 
         @Override
         public void press() {
-            if (btMode) {
-                if (bt != null) bt.sendMouseButton(BtHid.MOUSE_LEFT);
-            } else if (touchSession != null) {
-                touchSession.press();
-            }
+            if (touchSession != null) touchSession.press();
         }
 
         @Override
         public void release() {
-            if (btMode) {
-                if (bt != null) bt.sendMouseButton(0);
-            } else if (touchSession != null) {
-                touchSession.release();
-            }
+            if (touchSession != null) touchSession.release();
         }
 
         @Override
         public void scroll(int steps) {
-            if (btMode) {
-                if (bt != null) bt.sendMouseScroll(steps);
-            } else if (touchSession != null) {
-                touchSession.scroll(steps);
-            }
-        }
-
-        @Override
-        public boolean armLongPress() {
-            // 蓝牙：到点立即按下左键，盒子端从按下时刻自行计长按；直连只进入待定
-            if (!btMode || bt == null || !bt.isReady()) return false;
-            return bt.sendMouseButton(BtHid.MOUSE_LEFT);
+            if (touchSession != null) touchSession.scroll(steps);
         }
     };
 
-    /** 蓝牙单击：按下后 50ms 抬起 */
-    private void tapBt() {
-        if (bt == null || !bt.isReady()) {
-            setStatus(getString(R.string.bt_not_ready), false);
-            return;
-        }
-        bt.sendMouseButton(BtHid.MOUSE_LEFT);
-        ui.postDelayed(() -> {
-            if (btMode && bt != null) bt.sendMouseButton(0);
-        }, 50);
-    }
-
     private void touchpadNoChannel() {
-        if (btMode) setStatus(getString(R.string.touchpad_need_bt), false);
-        else if (lanMode) setStatus(getString(R.string.touchpad_need_lan), false);
+        if (lanMode) setStatus(getString(R.string.touchpad_need_lan), false);
         else setStatus(getString(R.string.select_mode_first), false);
     }
 
+    /** SPEC-029：读取输入方式，旧值 touchpad 迁移为 touch */
+    private String savedInputMode() {
+        String m = sp.getString("input", INPUT_DPAD);
+        if ("touchpad".equals(m)) {
+            sp.edit().putString("input", INPUT_TOUCH).apply();
+            return INPUT_TOUCH;
+        }
+        return INPUT_MOUSE.equals(m) || INPUT_TOUCH.equals(m) ? m : INPUT_DPAD;
+    }
+
     /** 切换输入方式：触控板互斥飞鼠，方向盘保留原按键布局 */
-    private void setInputMode(boolean touchpad) {
+    private void setInputMode(String mode) {
+        boolean touchpad = !INPUT_DPAD.equals(mode);
+        // SPEC-029：蓝牙 HID 不支持触控板的两种模式
+        if (touchpad && btMode) {
+            setStatus(getString(R.string.touchpad_lan_only), false);
+            return;
+        }
         inputTouchpad = touchpad;
-        sp.edit().putString("input", touchpad ? "touchpad" : "dpad").apply();
+        inputMouse = INPUT_MOUSE.equals(mode);
+        sp.edit().putString("input", mode).apply();
         if (touchpad) stopAirMouse(); // FR-23-5：进触控板先关飞鼠
-        if (touchpadView != null) touchpadView.setVisibility(touchpad ? View.VISIBLE : View.GONE);
+        if (touchpadView != null) {
+            touchpadView.setMouseMode(inputMouse);
+            updateTouchpadHints();
+            touchpadView.setVisibility(touchpad ? View.VISIBLE : View.GONE);
+        }
         if (dpadDisc != null) dpadDisc.setVisibility(touchpad ? View.GONE : View.VISIBLE);
         updateInputToggle();
         if (touchpad) startTouchpad();
@@ -648,31 +653,38 @@ public class MainActivity extends Activity {
     private void updateInputToggle() {
         if (inputDpad == null) return;
         applySeg(inputDpad, !inputTouchpad);
-        applySeg(inputTouchpadBtn, inputTouchpad);
+        applySeg(inputTouchBtn, inputTouchpad && !inputMouse);
+        applySeg(inputMouseBtn, inputMouse);
     }
 
-    /** 进入触控板：蓝牙无需会话，直连建立专用长连接并点亮光标 */
+    /** 触控板提示文案随模式切换 */
+    private void updateTouchpadHints() {
+        if (touchpadView == null) return;
+        touchpadView.setHintLines(
+                getString(inputMouse ? R.string.touchpad_mouse_hint_top
+                        : R.string.touchpad_hint_top),
+                getString(inputMouse ? R.string.touchpad_mouse_hint_bottom
+                        : R.string.touchpad_hint_bottom));
+    }
+
+    /** 进入触控板：直连建立专用长连接；鼠标模式点亮光标，触摸模式清理旧光标 */
     private void startTouchpad() {
         stopTouchpad();
-        if (touchpadView != null) {
-            touchpadView.setTiming(btMode ? 350 : 500, btMode ? 40 : 100);
-        }
         if (btMode) {
-            if (bt == null || !bt.isReady() || bt.connectedDevice() == null) {
-                setStatus(getString(R.string.touchpad_need_bt), false);
-            }
+            setStatus(getString(R.string.touchpad_lan_only), false);
             return;
         }
         if (lanMode && lan != null && !tokenOf(curHost()).isEmpty()) {
             touchSession = new TouchSession(curHost(), LanClient.DEFAULT_PORT, tokenOf(curHost()),
                     msg -> setStatus(Errors.friendly(this, new Exception(msg)), false));
-            touchSession.showCursor();
+            if (inputMouse) touchSession.showCursor();
+            else touchSession.hide();
             return;
         }
         setStatus(getString(R.string.touchpad_need_lan), false);
     }
 
-    /** 退出触控板：先释放按压（reset 内发 release），再隐藏光标并关闭会话 */
+    /** 退出触控板：先中止本地手势，再隐藏光标并关闭会话 */
     private void stopTouchpad() {
         if (touchpadView != null) touchpadView.reset();
         if (touchSession != null) {
@@ -862,7 +874,7 @@ public class MainActivity extends Activity {
             return;
         }
         // SPEC-023：触控板与飞鼠互斥，开飞鼠时自动切回方向盘
-        if (inputTouchpad) setInputMode(false);
+        if (inputTouchpad) setInputMode(INPUT_DPAD);
         airMouse = true;
         updateMouseBtn();
         setStatus(getString(R.string.air_on), true);
@@ -1558,6 +1570,13 @@ public class MainActivity extends Activity {
         if (modeLan == null) return;
         applySeg(modeLan, lanMode);
         applySeg(modeBt, btMode);
+        // SPEC-029：蓝牙 HID 不支持触控板的两种模式，两段按钮置灰
+        if (inputTouchBtn != null) inputTouchBtn.setAlpha(btMode ? 0.45f : 1f);
+        if (inputMouseBtn != null) inputMouseBtn.setAlpha(btMode ? 0.45f : 1f);
+        if (btMode && inputTouchpad) {
+            setInputMode(INPUT_DPAD);
+            setStatus(getString(R.string.touchpad_lan_only), false);
+        }
     }
 
     private void applySeg(TextView t, boolean on) {
@@ -1900,8 +1919,7 @@ public class MainActivity extends Activity {
 
     /** 进入蓝牙模式：注册 HID；已记住盒子则直接重连，否则弹设备选择（SPEC-005 FR-5-7/5-8） */
     private void startBt() {
-        stopTouchpad(); // SPEC-023：先释放按压再切蓝牙
-        if (touchpadView != null) touchpadView.setTiming(350, 40);
+        stopTouchpad(); // SPEC-028：切蓝牙前结束触控板会话
         // Android 8.x 没有 HID Device API：点击时明确告知，模式按钮仍常显
         if (Build.VERSION.SDK_INT < 28) {
             setStatus(getString(R.string.bt_not_supported), false);

@@ -101,5 +101,7 @@ spec/
 | SPEC-025 | 网页设备管理与触控板（删除飞鼠） | developing |
 | SPEC-026 | 直连方向键焦点边界翻页 | developing |
 | SPEC-027 | 启动自动探测更新与「有更新」标签 | developing |
+| SPEC-028 | 触控板绝对触摸（点哪打哪） | developing |
+| SPEC-029 | 触控板双模式（触摸 / 鼠标兜底） | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。

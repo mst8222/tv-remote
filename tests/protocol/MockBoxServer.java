@@ -87,6 +87,20 @@ public class MockBoxServer implements AutoCloseable {
     public volatile int lastScroll;
     public volatile int connectionCount;
 
+    // SPEC-028：绝对触摸命令记录（归一化坐标 0..10000）
+    public volatile int tapnCount;
+    public volatile int longnCount;
+    public volatile int swipeCount;
+    public volatile int lastTapNx;
+    public volatile int lastTapNy;
+    public volatile int lastLongNx;
+    public volatile int lastLongNy;
+    public volatile int lastSwipeX1;
+    public volatile int lastSwipeY1;
+    public volatile int lastSwipeX2;
+    public volatile int lastSwipeY2;
+    public volatile int lastSwipeMs;
+
     /** 测试辅助：清空触控板命令记录，避免用例之间互相影响 */
     public void resetTouchRecords() {
         moveCount = 0;
@@ -99,6 +113,35 @@ public class MockBoxServer implements AutoCloseable {
         lastDy = 0;
         mouseDown = false;
         connectionCount = 0;
+        tapnCount = 0;
+        longnCount = 0;
+        swipeCount = 0;
+        lastTapNx = 0;
+        lastTapNy = 0;
+        lastLongNx = 0;
+        lastLongNy = 0;
+        lastSwipeX1 = 0;
+        lastSwipeY1 = 0;
+        lastSwipeX2 = 0;
+        lastSwipeY2 = 0;
+        lastSwipeMs = 0;
+    }
+
+    /** SPEC-028：解析归一化坐标「x y」，均为 0..10000 的整数 */
+    private static int[] normPoint(String[] p) {
+        if (p.length < 3) return null;
+        String[] v = p[2].trim().split("\\s+");
+        if (v.length != 2) return null;
+        int x;
+        int y;
+        try {
+            x = Integer.parseInt(v[0]);
+            y = Integer.parseInt(v[1]);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (x < 0 || x > 10000 || y < 0 || y > 10000) return null;
+        return new int[]{x, y};
     }
 
     // SPEC-006：同一 IP 连续配对失败 5 次锁 5 分钟
@@ -247,6 +290,50 @@ public class MockBoxServer implements AutoCloseable {
                     if (p.length > 2) return "ERR arg";
                     if (!a11yEnabled) return "ERR a11y";
                     hideCount++;
+                    return "OK";
+                }
+                case "MTAPN": {
+                    // SPEC-028：绝对点按，归一化坐标 0..10000
+                    int[] v = normPoint(p);
+                    if (v == null) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    lastTapNx = v[0];
+                    lastTapNy = v[1];
+                    tapnCount++;
+                    return "OK";
+                }
+                case "MLONGN": {
+                    // SPEC-028：绝对长按，归一化坐标 0..10000
+                    int[] v = normPoint(p);
+                    if (v == null) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    lastLongNx = v[0];
+                    lastLongNy = v[1];
+                    longnCount++;
+                    return "OK";
+                }
+                case "MSWIPEN": {
+                    // SPEC-028：绝对滑动，归一化坐标 0..10000 + 时长 50..1500ms
+                    if (p.length < 3) return "ERR arg";
+                    String[] w = p[2].trim().split("\\s+");
+                    if (w.length != 5) return "ERR arg";
+                    int[] a = new int[5];
+                    try {
+                        for (int i = 0; i < 5; i++) a[i] = Integer.parseInt(w[i]);
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    for (int i = 0; i < 4; i++) {
+                        if (a[i] < 0 || a[i] > 10000) return "ERR arg";
+                    }
+                    if (a[4] < 50 || a[4] > 1500) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    lastSwipeX1 = a[0];
+                    lastSwipeY1 = a[1];
+                    lastSwipeX2 = a[2];
+                    lastSwipeY2 = a[3];
+                    lastSwipeMs = a[4];
+                    swipeCount++;
                     return "OK";
                 }
                 case "TEXT": {

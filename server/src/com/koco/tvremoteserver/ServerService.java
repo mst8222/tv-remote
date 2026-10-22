@@ -58,6 +58,10 @@ import javax.net.ssl.SSLServerSocketFactory;
  *   MTAP <token>              -> OK | ERR a11y | ERR exec（SPEC-023 光标处单击）
  *   MLONG <token>             -> OK | ERR a11y | ERR exec（SPEC-023 光标处长按）
  *   SCROLL <token> <steps>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-023，-5..5）
+ *   MTAPN <token> <x> <y>     -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028，0..10000）
+ *   MLONGN <token> <x> <y>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028）
+ *   MSWIPEN <token> <x1> <y1> <x2> <y2> <ms>
+ *                             -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028，ms 50..1500）
  *   PING                      -> PONG
  */
 public class ServerService extends Service {
@@ -189,6 +193,23 @@ public class ServerService extends Service {
     /** 包名只允许字母、数字、点、下划线，长度不超过 128 */
     private static boolean validPkg(String pkg) {
         return pkg.length() <= MAX_PKG_LEN && pkg.matches("[A-Za-z0-9._]+");
+    }
+
+    /** SPEC-028：解析绝对触摸的归一化坐标「x y」，均为 0..10000 的整数 */
+    private static int[] normPoint(String[] p) {
+        if (p.length < 3) return null;
+        String[] v = p[2].trim().split("\\s+");
+        if (v.length != 2) return null;
+        int x;
+        int y;
+        try {
+            x = Integer.parseInt(v[0]);
+            y = Integer.parseInt(v[1]);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (x < 0 || x > 10000 || y < 0 || y > 10000) return null;
+        return new int[]{x, y};
     }
 
     private boolean isPairLocked(String ip) {
@@ -379,6 +400,48 @@ public class ServerService extends Service {
                     // SPEC-023：退出触控板时立即隐藏光标，不等 5 秒空闲回收
                     if (p.length > 2) return "ERR arg";
                     switch (TvRemoteAccessibilityService.hideAirCursor()) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MTAPN": {
+                    // SPEC-028：绝对点按，归一化坐标 0..10000
+                    int[] v = normPoint(p);
+                    if (v == null) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.touchTap(v[0], v[1])) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MLONGN": {
+                    // SPEC-028：绝对长按，归一化坐标 0..10000
+                    int[] v = normPoint(p);
+                    if (v == null) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.touchLong(v[0], v[1])) {
+                        case TvRemoteAccessibilityService.RES_OK: return "OK";
+                        case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
+                        default: return "ERR exec";
+                    }
+                }
+                case "MSWIPEN": {
+                    // SPEC-028：绝对滑动，归一化坐标 0..10000 + 时长 50..1500ms
+                    if (p.length < 3) return "ERR arg";
+                    String[] w = p[2].trim().split("\\s+");
+                    if (w.length != 5) return "ERR arg";
+                    int[] a = new int[5];
+                    try {
+                        for (int i = 0; i < 5; i++) a[i] = Integer.parseInt(w[i]);
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    for (int i = 0; i < 4; i++) {
+                        if (a[i] < 0 || a[i] > 10000) return "ERR arg";
+                    }
+                    if (a[4] < 50 || a[4] > 1500) return "ERR arg";
+                    switch (TvRemoteAccessibilityService.touchSwipe(
+                            a[0], a[1], a[2], a[3], a[4])) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
                         default: return "ERR exec";
