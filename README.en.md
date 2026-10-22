@@ -427,6 +427,8 @@ Known limitations:
 
 ## Versions
 
+- **v1.6.7**: the header "Update" badge now uses an orange background to stand out from the
+  blue primary action color; all other colors are unchanged.
 - **v1.6.6**: in-app updates now query two sources: the GitHub and Gitee public releases are
   checked together, and the higher version on either source triggers the update badge. Downloads
   use the Gitee direct URL first and fall back to the GitHub asset API, so networks where GitHub

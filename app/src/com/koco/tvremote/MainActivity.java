@@ -65,9 +65,11 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
 
     // SPEC-012 配色：纯净深底 + 分组卡片 + 单一蓝色强调
+    // SPEC-031：「有更新」标签用橘色背景，与遥控器蓝色强调区分
     static final int BG = 0xFF0A0E14, SURFACE = 0xFF141A24, SURFACE2 = 0xFF1C2430,
             ACCENT = 0xFF4F7CFF, TXT = 0xFFEAEFF7, SUB = 0xFF8A94A6, DIM = 0xFF232C3A,
-            GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A, POWER = 0xFFFF6B6B;
+            GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A, POWER = 0xFFFF6B6B,
+            BADGE = 0xFFF07A1A;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     /** SPEC-019：应用图标内存缓存，键为「设备 IP|包名」，避免切设备串图 */
@@ -414,7 +416,7 @@ public class MainActivity extends Activity {
         updateBadge.setTextSize(11);
         updateBadge.setGravity(Gravity.CENTER);
         updateBadge.setPadding(dp(9), dp(4), dp(9), dp(4));
-        updateBadge.setBackground(round(ACCENT, 999, 0));
+        updateBadge.setBackground(round(BADGE, 999, 0));
         updateBadge.setVisibility(View.GONE);
         updateBadge.setOnClickListener(v -> {
             if (pendingUpdate != null) {
