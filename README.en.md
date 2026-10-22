@@ -1,21 +1,56 @@
+<div align="center">
+
+<img src="app/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="TV Remote">
+
 # TV Remote
 
-English | [中文](README.md)
+**Turn your phone into a remote for an Android TV box**<br>
+No root · No developer options · No wireless debugging
 
-Control an Android TV box from your phone. **No root, no developer options, no wireless debugging**:
-install a small always-on service on the box, keep both devices on the same LAN, and the phone can
+<p>
+  <a href="./README.md">简体中文</a> |
+  <strong>English</strong>
+</p>
+
+<p>
+  <a href="https://github.com/mst8222/tv-remote/releases/latest">
+    <img src="https://img.shields.io/github/v/release/mst8222/tv-remote?color=brightgreen&include_prereleases" alt="release">
+  </a><!--
+  --><a href="./LICENSE">
+    <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue" alt="license">
+  </a><!--
+  --><img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white" alt="Android 8.0+">
+  <img src="https://img.shields.io/badge/root-not%20required-brightgreen" alt="no root">
+</p>
+
+<p>
+  <a href="#overview">Overview</a> •
+  <a href="#features">Features</a> •
+  <a href="#screenshots">Screenshots</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#troubleshooting">Troubleshooting</a>
+</p>
+
+</div>
+
+## Overview
+
+Install a small always-on service on the box, keep both devices on the same LAN, and the phone can
 control it. The service comes back automatically after a reboot. If the box app is not installed,
 the phone can still work as a Bluetooth HID remote.
 
-- Controller: Android phone (developed and tested on Samsung Note20, Android 13)
-- Target: Android TV box (tested on H96 Max V56 / Android 12 and Samsung Fold3 / Android 13)
-- Both APKs are built by a small manual toolchain, with no third-party dependencies (about 100–120 KB each)
+> [!NOTE]
+> The direct protocol is **plaintext TCP** over the LAN. It is meant for a trusted home or office
+> network only — never expose port 8899 to the Internet.
 
----
+| | |
+|---|---|
+| Controller | Android phone (developed and tested on Samsung Note20 / Android 13) |
+| Target | Android TV box (tested on H96 Max V56 / Android 12 and Samsung Fold3 / Android 13) |
+| Prerequisites | Phone and box on the same LAN; accessibility enabled on the box (no root) |
+| Build | Manual toolchain, no third-party dependencies, about 100–130 KB per APK |
 
-## What it is for
-
-Turn a phone into a full-featured remote for an Android TV box:
+It solves three everyday problems:
 
 1. **The remote is always missing** — D-pad, OK, Back, Home, volume, mute and power are all on the phone.
 2. **Typing on a TV is painful** — type a search term or account password on the phone and send it
@@ -25,6 +60,32 @@ Turn a phone into a full-featured remote for an Android TV box:
 
 It also manages several boxes: scan or add devices manually, and each device remembers its own
 pairing and connection mode.
+
+## Features
+
+| Feature | Description |
+|---|---|
+| Full keypad | D-pad, OK, Back, Home, Menu, Power, volume, mute |
+| Text input | Type on the phone and write into the box's focused field |
+| App shortcuts | Dynamically lists every launchable third-party app; Settings is always first |
+| Air mouse | BT HID mode: tilt the phone to move the box cursor, OK acts as left click |
+| OK long-press | BT mode keeps sending key-down and lets the TV app decide; direct mode sends a long-press command on release after 500 ms |
+| Multi-device | LAN scan, manual add, switch and delete; pairing and connection mode remembered per device |
+| No root | Box side uses the accessibility service, `AudioManager` and `PackageManager` |
+| Auto start | Foreground service with a notification, started again on boot/reboot |
+| Bilingual UI | Phone: Chinese / English / follow system; box follows the box system language |
+| In-app update | Both apps read the latest GitHub Release, download the APK and let the system installer confirm |
+
+### App shortcut rules
+
+The phone requests the box's app list via `LIST`; the payload is `package|base64(label)` per entry.
+The UI renders every entry sorted by label, with Settings (`com.android.settings`, a system app)
+pinned first and always shown.
+
+- Labels come from `PackageManager.getApplicationLabel` in the box's system language;
+- only third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry are listed;
+- icons are not transferred; the first character of the label is shown;
+- text input and app shortcuts are available only in direct mode.
 
 ## Screenshots
 
@@ -63,7 +124,7 @@ pairing and connection mode.
 > volume do not need accessibility. In Bluetooth mode the phone app must stay in the foreground
 > (Android unregisters HID apps in the background; returning to the foreground re-registers it).
 
-## Architecture
+## How it works
 
 ```
 ┌──────────────────────────┐                       ┌────────────────────────────────┐
@@ -80,9 +141,17 @@ pairing and connection mode.
           └── Bluetooth HID ─────► box Bluetooth stack (box app not required)
 ```
 
-## Requirements
+| Component | Port / mechanism | Role |
+|---|---|---|
+| `ServerService` | TCP 8899 | Handles `PING` / `PAIR` / `KEY` / `KEYLONG` / `TEXT` / `APP` / `LIST` |
+| Discovery | UDP 8898 | Box broadcasts `TVREMOTE\|8899\|<model>` every 3 seconds |
+| `TvRemoteAccessibilityService` | Android accessibility API | Global keys, focus traversal, text input, long-press injection |
+| `BootReceiver` | Boot broadcast | Restarts the service after a power cycle |
+| `BtHid` | Bluetooth HID | Keyboard, consumer control and mouse (air mouse) reports |
 
-### Android versions
+## Quick start
+
+### Requirements
 
 | Component | Minimum | Verified |
 |---|---|---|
@@ -90,11 +159,7 @@ pairing and connection mode.
 | Phone · Bluetooth HID | Android 9.0 (API 28) | Android 13 (Samsung Note20) |
 | Box app | Android 8.0 (API 26) | Android 12 (H96 Max V56), Android 13 (Samsung Fold3) |
 
-- Bluetooth HID relies on `BluetoothHidDevice` (API 28+). Phones below Android 9 can only use LAN direct.
-- If a device has no usable Bluetooth adapter, the app reports that Bluetooth remote is not supported;
-  LAN direct is unaffected.
-
-### Box requirements
+Box requirements:
 
 1. An Android TV box or Android TV that allows sideloading APKs. Non-Android platforms
    (webOS, Tizen, conventional TVs) are not supported.
@@ -107,25 +172,17 @@ pairing and connection mode.
 5. Some box firmware does not respond to touch (H96 in our tests). Use the box's own remote to focus
    and press OK, or open system settings over ADB.
 
-### Network requirements
+Network requirements:
 
 - Phone and box must be on the **same LAN / subnet**.
 - Direct mode uses **TCP 8899** (control) and **UDP 8898** (discovery broadcast).
 - If the router enables **AP isolation**, auto-discovery fails; add the box IP manually instead.
 - A static DHCP lease for the box is recommended. Changing the IP requires adding the device again.
 
-### Out of scope
-
-- Controlling the TV's own power/volume (IR / HDMI-CEC): the Power key locks the box, and volume
-  changes the box media volume.
-- WAN or cross-subnet control. The protocol is plaintext and meant for a trusted LAN only.
-- iOS clients.
-
-## Quick start
-
 ### 1. Box side
 
-1. Download `TVRemoteServer.apk` from Releases and install it (USB drive or `adb install`).
+1. Download `TVRemoteServer.apk` from [Releases](https://github.com/mst8222/tv-remote/releases/latest)
+   and install it (USB drive or `adb install`).
 2. Open "TV Remote Service" and allow notifications. The screen shows the **6-digit pair code**
    and the box IP.
 3. Open box Settings → Accessibility and enable "TV Remote Service".
@@ -136,7 +193,8 @@ pairing and connection mode.
 
 ### 2. Phone · LAN direct
 
-1. Download `TVRemote.apk` from Releases and install it; connect the phone to the same Wi-Fi as the box.
+1. Download `TVRemote.apk` from [Releases](https://github.com/mst8222/tv-remote/releases/latest)
+   and install it; connect the phone to the same Wi-Fi as the box.
 2. Open the app. Tap "Scan" and pick the box in the result list, or tap "Add" and enter a name and IP.
 3. Tap "Direct", enter the 6-digit code shown on the box, then "Pair and connect".
 4. The remote is ready. Pairing is stored per box IP and restored automatically next time.
@@ -147,11 +205,16 @@ pairing and connection mode.
 
 ### 3. Phone · Bluetooth HID (optional)
 
+<details>
+<summary><strong>Show Bluetooth pairing steps</strong></summary>
+
 1. Enable Bluetooth on the phone; on the box, open Bluetooth and start searching for devices.
 2. Tap "BT" in the app. If no device is paired yet, tap "Let the box find this phone"
    (makes the phone discoverable for 120 seconds).
 3. Select the phone in the box Bluetooth list and confirm the pairing code on both sides.
 4. Return to the app, tap "BT" again and choose the paired box. Wait for "Bluetooth connected".
+
+</details>
 
 ## Daily use
 
@@ -175,33 +238,21 @@ pairing and connection mode.
 | App shortcuts | Dynamically lists every launchable third-party app on the box (name + first-letter icon) |
 | Check for updates | Phone: "About" card; box: "Version update" card. Reads the latest GitHub Release, downloads the APK, and the system installer confirms |
 
-### App shortcut rules
+## Direct protocol
 
-The phone requests the box's app list via `LIST`; the payload is
-`package|base64(label)` per entry. The UI renders every entry sorted by label,
-with Settings (`com.android.settings`) pinned first (system app, always shown).
+Box TCP 8899, one command per line terminated by `\n`.
 
-- Labels come from `PackageManager.getApplicationLabel` in the box's system language;
-- only third-party apps with a LAUNCHER / LEANBACK_LAUNCHER entry are listed;
-- icons are not transferred; the first character of the label is shown;
-- text input and app shortcuts are available only in direct mode.
-- listing relies on the `<queries>` declaration in the box app manifest (Android 11+ package visibility).
+| Send | Reply | Meaning |
+|---|---|---|
+| `PING` | `PONG` | Liveness check, no auth |
+| `PAIR <6-digit code>` | `OK <token>` / `ERR badcode` | Exchange the pair code for a long-lived token |
+| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Inject a key |
+| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only) via `ACTION_LONG_CLICK` on the focused node |
+| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
+| `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
+| `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
 
-## Troubleshooting
-
-| Symptom | Cause / fix |
-|---|---|
-| "Connection refused: box service not running" | Open "TV Remote Service" on the box |
-| "Connection timed out / failed" | Box offline, IP changed, or devices are not on the same Wi-Fi |
-| "Wrong pairing code" | Re-enter the 6 digits shown on the box; clearing app data changes the code |
-| "Pairing expired" | Long-press "Direct" to clear the pairing, then pair again |
-| "Accessibility service is off on the box" | Enable "TV Remote Service" in box Settings → Accessibility |
-| "The box could not perform it" | No focused control/input on the current screen; open the target screen first |
-| Scan finds nothing | Same Wi-Fi, box service running, AP isolation off; or add the IP manually |
-| D-pad does nothing | The screen has no focusable element (e.g. full-screen player); some firmware only supports focus traversal |
-| Bluetooth keys do nothing | Keep the app in the foreground, tap "BT" again, confirm "Bluetooth connected" |
-| Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
-| Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
+UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds for auto-discovery.
 
 ## Build
 
@@ -219,63 +270,36 @@ python build.py server    # -> dist/TVRemoteServer.apk
 `build.py` looks for the SDK under `%LOCALAPPDATA%\Android\Sdk`. The chain is
 aapt2 → javac → d8 → dex packaging → zipalign → apksigner.
 
-### Signing key
+> [!WARNING]
+> `keys/` is not committed (`.gitignore`). If `keys/release.jks` is lost, existing installations
+> cannot be upgraded in place and must be uninstalled first. Back this file up.
 
-`keys/` is not committed (`.gitignore`). If `keys/release.jks` is lost, existing installations
-cannot be upgraded in place and must be uninstalled first. Back this file up.
+## Troubleshooting
 
-## Direct protocol
+| Symptom | Cause / fix |
+|---|---|
+| "Connection refused: box service not running" | Open "TV Remote Service" on the box |
+| "Connection timed out / failed" | Box offline, IP changed, or devices are not on the same Wi-Fi |
+| "Wrong pairing code" | Re-enter the 6 digits shown on the box; clearing app data changes the code |
+| "Pairing expired" | Long-press "Direct" to clear the pairing, then pair again |
+| "Accessibility service is off on the box" | Enable "TV Remote Service" in box Settings → Accessibility |
+| "The box could not perform it" | No focused control/input on the current screen; open the target screen first |
+| Scan finds nothing | Same Wi-Fi, box service running, AP isolation off; or add the IP manually |
+| D-pad does nothing | The screen has no focusable element (e.g. full-screen player); some firmware only supports focus traversal |
+| Bluetooth keys do nothing | Keep the app in the foreground, tap "BT" again, confirm "Bluetooth connected" |
+| Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
+| Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
 
-Box TCP 8899, one command per line terminated by `\n`.
+## Scope and limitations
 
-| Send | Reply | Meaning |
-|---|---|---|
-| `PING` | `PONG` | Liveness check, no auth |
-| `PAIR <6-digit code>` | `OK <token>` / `ERR badcode` | Exchange the pair code for a long-lived token |
-| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Inject a key |
-| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only) via `ACTION_LONG_CLICK` on the focused node |
-| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
-| `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
-| `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
+Out of scope:
 
-UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds for auto-discovery.
+- Controlling the TV's own power/volume (IR / HDMI-CEC): the Power key locks the box, and volume
+  changes the box media volume.
+- WAN or cross-subnet control. The protocol is plaintext and meant for a trusted LAN only.
+- iOS clients.
 
-## Project layout
-
-```
-tv-remote/
-├── app/                    # Phone app, com.koco.tvremote
-│   ├── AndroidManifest.xml
-│   ├── res/                # Icons + Chinese/English strings (default zh, values-en for English)
-│   └── src/com/koco/tvremote/
-│       ├── MainActivity.java   # UI and interaction, built in code (no layout XML)
-│       ├── LanClient.java      # Direct client (TCP + UDP discovery)
-│       ├── BtHid.java          # Bluetooth HID keyboard / consumer control / mouse (air mouse)
-│       └── Errors.java         # Localized error mapping
-├── server/                 # Box app, com.koco.tvremoteserver
-│   ├── AndroidManifest.xml
-│   ├── res/                # Icons + UI/notification strings
-│   └── src/com/koco/tvremoteserver/
-│       ├── MainActivity.java                  # Pair code / address / accessibility status
-│       ├── ServerService.java                 # Foreground service, TCP 8899 + UDP 8898
-│       ├── TvRemoteAccessibilityService.java  # Root-free key/text injection
-│       └── BootReceiver.java                  # Start on boot
-├── docs/screenshots/       # README screenshots
-├── tools/                  # PC-side Java protocol prototypes (ADB / TLS)
-├── build.py                # One-command build
-├── keys/                   # Signing keys (not committed)
-└── dist/                   # Build output (not committed)
-```
-
-## Security
-
-- The direct protocol is **plaintext TCP** and intended for a trusted LAN only. Do not expose port
-  8899 to the Internet.
-- The pair code is only used to obtain a token; subsequent commands require the token.
-- The box service only accepts remote-control commands; it provides no file access or arbitrary
-  command execution.
-
-## Known limitations
+Known limitations:
 
 - "Power" locks the screen; it cannot really power the box on/off. "Menu" opens recent tasks.
 - Volume changes only the box media volume, not the TV or an AV receiver.
@@ -307,25 +331,25 @@ tv-remote/
 
 ## Versions
 
-- v1.5.0: OK now distinguishes short and long press (BT sends key down/up; direct mode adds a
+- **v1.5.0**: OK now distinguishes short and long press (BT sends key down/up; direct mode adds a
   `KEYLONG` command); a new air-mouse key at the top-right of the remote card uses the phone
   gyroscope to move the box cursor in BT HID mode, with OK as left click.
   Upgrade note: boxes paired with an older version must be unpaired and paired again before
   air mouse works.
-- v1.4.1: fixed the update callback that never opened the system install dialog (the PendingIntent
+- **v1.4.1**: fixed the update callback that never opened the system install dialog (the PendingIntent
   must be MUTABLE); downloads now use the GitHub API asset endpoint with a 30-second timeout; the
   box update button also handles OK/ENTER. The v1.4.0 OTA build has these defects, so install
   v1.4.1 manually once before in-app updates can work.
-- v1.4.0: in-app update check on both apps; reads the latest GitHub Release, downloads the
+- **v1.4.0**: in-app update check on both apps; reads the latest GitHub Release, downloads the
   matching APK and lets the system installer complete the upgrade. The box service restarts
   automatically after the update.
-- v1.3.0: dynamic app shortcuts; `LIST` also returns app labels (`package|base64(label)`) and the
+- **v1.3.0**: dynamic app shortcuts; `LIST` also returns app labels (`package|base64(label)`) and the
   phone renders every launchable third-party app on the box; the box app declares `<queries>` for
   Android 11+ package visibility.
-- v1.2: root-free box control through the accessibility service; connection mode and Bluetooth
+- **v1.2**: root-free box control through the accessibility service; connection mode and Bluetooth
   target remembered per device; Bluetooth Back/Home switched to consumer control
   (`AC Back` / `AC Home`).
-- v1.1: removed phone-side ADB control; kept "Direct + Bluetooth".
+- **v1.1**: removed phone-side ADB control; kept "Direct + Bluetooth".
 
 ## License
 
@@ -333,4 +357,14 @@ Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Personal stu
 testing, and other noncommercial use are permitted; **commercial use is prohibited**.
 Redistributions and modified works must retain this license and copyright notice.
 
-Questions and bug reports: please open a GitHub Issue.
+---
+
+<div align="center">
+
+If this project helps you, please consider giving it a Star.
+
+[Releases](https://github.com/mst8222/tv-remote/releases) • [Issues](https://github.com/mst8222/tv-remote/issues)
+
+<sub>TV Remote · Noncommercial use only</sub>
+
+</div>
