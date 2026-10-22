@@ -451,7 +451,10 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 ## 许可
 
 本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)：
-允许个人学习、研究、测试以及非商业组织使用，**禁止任何商业用途**。
+
+- **非商业学习、研究**：免费使用，遵循 PolyForm Noncommercial 条款。
+- **任何商业使用（企业内部、SaaS、二次售卖）**：禁止直接使用，需联系作者获取单独商业授权（mst8222@163.com）。
+
 分发或修改后的作品必须保留本许可与版权声明。
 
 ---
