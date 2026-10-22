@@ -8,6 +8,7 @@
     <string name="ui_running">服务运行中</string>
     <string name="ui_grp_status">服务状态</string>
     <string name="ui_grp_pair">配对码</string>
+    <string name="ui_pair_hint">手机端选择「直连」后输入此配对码</string>
     <string name="ui_grp_addr">连接地址</string>
     <string name="ui_local_addr">本机地址：%1$s　端口：%2$d\n发现端口：%3$d\n网页遥控：http://%1$s:%4$d　https://%1$s:%5$d</string>
     <string name="ui_no_network">未连接网络</string>

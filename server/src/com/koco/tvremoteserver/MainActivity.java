@@ -42,6 +42,8 @@ public class MainActivity extends Activity {
     private ImageView qrView;
     private TextView qrTip;
     private String qrKey;
+    /** SPEC-033：宽屏双栏只做一次高度对齐，避免每次布局都改参数 */
+    private boolean fitted;
     private GradientDrawable dotBg;
     /** 检查到的待安装 Release；为空表示当前没有可下载的新版本 */
     private Updater.Release pendingUpdate;
@@ -61,11 +63,11 @@ public class MainActivity extends Activity {
 
     private ViewGroup buildUi() {
         // SPEC-033：电视/DeX 等宽屏用双栏布局，手机竖屏保持单栏
-        boolean wide = getResources().getConfiguration().screenWidthDp >= 720;
+        final boolean wide = getResources().getConfiguration().screenWidthDp >= 720;
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
-        root.setPadding(dp(48), dp(36), dp(48), dp(36));
+        root.setPadding(dp(48), dp(28), dp(48), dp(28));
 
         TextView title = new TextView(this);
         title.setText(getString(R.string.ui_title));
@@ -86,35 +88,24 @@ public class MainActivity extends Activity {
         a11yView.setOnClickListener(v -> openA11ySettings());
         statusCard.addView(a11yView);
 
-        // 配对码卡：11sp 分组标题 + 大号蓝字；SPEC-033 二维码并入本卡
-        // （宽屏与配对码并排、窄屏在配对码下方），保证首屏即可扫码，无需滚动
+        // 配对码卡：大号蓝字 + 使用提示（二维码属于「连接地址」，见下）
         LinearLayout pairCard = card(R.string.ui_grp_pair);
         codeView = new TextView(this);
-        codeView.setTextSize(64);
+        // 窄屏卡片内宽约 270dp，64sp 六位数字会折行；48sp 可单行显示
+        codeView.setTextSize(wide ? 64 : 48);
         codeView.setTextColor(ACCENT);
-        codeView.setLetterSpacing(0.25f);
+        codeView.setLetterSpacing(wide ? 0.25f : 0.18f);
         codeView.setGravity(Gravity.CENTER);
-        codeView.setPadding(0, dp(16), 0, dp(20));
+        pairCard.addView(codeView, lpRow(dp(12)));
+        TextView pairHint = new TextView(this);
+        pairHint.setText(R.string.ui_pair_hint);
+        pairHint.setTextSize(13);
+        pairHint.setTextColor(SUB);
+        pairHint.setGravity(Gravity.CENTER);
+        pairHint.setPadding(0, dp(10), 0, 0);
+        pairCard.addView(pairHint);
 
-        // SPEC-024：扫码直接打开网页遥控，省去在手机上输入地址
-        qrView = new ImageView(this);
-        qrView.setVisibility(View.GONE);
-        qrTip = new TextView(this);
-        qrTip.setText(R.string.ui_qr_tip);
-        qrTip.setTextSize(13);
-        qrTip.setTextColor(SUB);
-        qrTip.setPadding(0, dp(12), 0, 0);
-        qrTip.setVisibility(View.GONE);
-
-        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        qlp.topMargin = dp(16);
-        qlp.gravity = Gravity.CENTER_HORIZONTAL;
-        pairCard.addView(codeView, lpRow(0));
-        pairCard.addView(qrView, qlp);
-        pairCard.addView(qrTip);
-
-        // 连接地址卡：只保留地址文字（二维码已移到配对码卡）
+        // 连接地址卡：IP / 端口 / 网页地址，二维码同属本卡（扫码即打开该地址）
         LinearLayout addrCard = card(R.string.ui_grp_addr);
         ipView = new TextView(this);
         ipView.setTextSize(15);
@@ -122,6 +113,28 @@ public class MainActivity extends Activity {
         ipView.setLineSpacing(dp(4), 1f);
         ipView.setPadding(0, dp(4), 0, 0);
         addrCard.addView(ipView, lpRow(0));
+
+        // SPEC-024：扫码直接打开网页遥控，省去在手机上输入地址
+        qrView = new ImageView(this);
+        qrView.setVisibility(View.GONE);
+        qrView.setPadding(dp(12), dp(12), dp(12), dp(12));
+        qrView.setBackground(roundQrBg());
+        qrTip = new TextView(this);
+        qrTip.setText(R.string.ui_qr_tip);
+        qrTip.setTextSize(13);
+        qrTip.setTextColor(SUB);
+        qrTip.setGravity(Gravity.CENTER);
+        qrTip.setVisibility(View.GONE);
+
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        qlp.topMargin = dp(16);
+        qlp.gravity = Gravity.CENTER_HORIZONTAL;
+        addrCard.addView(qrView, qlp);
+        LinearLayout.LayoutParams qtp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        qtp.topMargin = dp(10);
+        addrCard.addView(qrTip, qtp);
 
         // 版本更新卡（SPEC-017）：状态文字 + 检查更新/下载安装按钮，均可遥控聚焦
         LinearLayout updateCard = card(R.string.ui_grp_update);
@@ -167,20 +180,19 @@ public class MainActivity extends Activity {
         tip.setTextColor(DIMTXT);
         tip.setLineSpacing(dp(4), 1f);
 
-        // SPEC-033：宽屏左右两栏（左：状态 + 配对码/二维码，右：地址 + 版本更新），
-        // 内容在首屏内铺开，电视上不需要滚动就能看到二维码
+        // SPEC-033：宽屏左右两栏（左：状态 + 配对码 + 版本更新，右：地址 + 二维码），
+        // 两栏总高度对齐；首屏即可看到并扫描二维码
         if (wide) {
             LinearLayout cols = new LinearLayout(this);
             cols.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout left = new LinearLayout(this);
+            final LinearLayout left = new LinearLayout(this);
             left.setOrientation(LinearLayout.VERTICAL);
-            addCard(left, statusCard, dp(16));
+            addCard(left, statusCard, 0);
             addCard(left, pairCard, dp(16));
-            LinearLayout right = new LinearLayout(this);
+            addCard(left, updateCard, dp(16));
+            final LinearLayout right = new LinearLayout(this);
             right.setOrientation(LinearLayout.VERTICAL);
-            addCard(right, addrCard, dp(16));
-            addCard(right, updateCard, dp(16));
-            right.addView(tip, lpRow(dp(16)));
+            addCard(right, addrCard, 0);
             cols.addView(left, new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
@@ -188,19 +200,63 @@ public class MainActivity extends Activity {
             rp.leftMargin = dp(24);
             cols.addView(right, rp);
             root.addView(cols, lpRow(dp(16)));
-        } else {
-            addCard(root, statusCard, dp(16));
-            addCard(root, pairCard, dp(16));
-            addCard(root, addrCard, dp(16));
-            addCard(root, updateCard, dp(16));
             root.addView(tip, lpRow(dp(16)));
+
+            final ScrollView sv = new ScrollView(this);
+            sv.setBackgroundColor(BG);
+            sv.addView(root);
+            // 首帧量出自然高度后再统一两栏高度（首次测量发生在 attach 之后）
+            final LinearLayout fcols = cols;
+            sv.post(() -> fitColumns(sv, root, title, fcols, left, right,
+                    pairCard, addrCard, codeView, tip));
+            return sv;
         }
+
+        addCard(root, statusCard, dp(16));
+        addCard(root, pairCard, dp(16));
+        addCard(root, addrCard, dp(16));
+        addCard(root, updateCard, dp(16));
+        root.addView(tip, lpRow(dp(16)));
 
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(BG);
         sv.addView(root);
         return sv;
     }
+
+    /**
+     * SPEC-033：宽屏两栏总高度对齐。
+     * 至少占满首屏可用高度（不足时允许滚动），两栏等高的剩余空间由配对码卡与地址卡吸收，
+     * 使左右两栏底边平齐；二维码随地址卡置于首屏，不需要下拉。
+     */
+    private void fitColumns(ScrollView sv, LinearLayout root, View title, LinearLayout cols,
+                            LinearLayout left, LinearLayout right, LinearLayout pairCard,
+                            LinearLayout addrCard, TextView codeView, TextView tip) {
+        if (fitted) return;
+        int avail = sv.getHeight() - root.getPaddingTop() - root.getPaddingBottom()
+                - title.getHeight() - dp(16) - tip.getHeight() - dp(16);
+        int target = Math.max(avail, Math.max(left.getHeight(), right.getHeight()));
+        if (target <= 0) return;
+        fitted = true;
+        cols.getLayoutParams().height = target;
+        left.getLayoutParams().height = ViewGroup.LayoutParams.MATCH_PARENT;
+        right.getLayoutParams().height = ViewGroup.LayoutParams.MATCH_PARENT;
+        // 配对码与地址卡吸收剩余高度，左右两栏底边平齐
+        fill(pairCard);
+        fill(addrCard);
+        // 配对码在卡片剩余空间里垂直居中
+        fill(codeView);
+        cols.requestLayout();
+    }
+
+    /** 让卡片在所在栏中占满剩余高度 */
+    private void fill(View card) {
+        LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) card.getLayoutParams();
+        p.height = 0;
+        p.weight = 1f;
+        card.setLayoutParams(p);
+    }
+
 
     /** SPEC-012 分组卡片：SURFACE 底 24dp 圆角，左上 12sp SUB 分组标题 */
     private LinearLayout card(int titleRes) {
@@ -228,6 +284,14 @@ public class MainActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setColor(focused ? ACCENT : 0xFF1C2430);
         g.setCornerRadius(dp(999));
+        return g;
+    }
+
+    /** 二维码白底容器：深色界面上给扫码枪留出足够对比与静区 */
+    private GradientDrawable roundQrBg() {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0xFFFFFFFF);
+        g.setCornerRadius(dp(12));
         return g;
     }
 
@@ -381,10 +445,10 @@ public class MainActivity extends Activity {
         boolean[][] mod = QrEncoder.encode(text);
         int quiet = 4;
         int n = mod.length + quiet * 2;
-        // SPEC-033：宽屏放大到 300dp（电视上更易扫），同时不超过屏幕宽/高的五分之二，
-        // 保证 720x480 等低分辨率与手机竖屏下也能完整显示
+        // SPEC-033：宽屏 220dp（右栏宽约 360dp，含白底留白仍能放下），
+        // 并限制不超过屏幕宽/高的五分之二，保证低分辨率电视与手机竖屏下也能完整显示
         boolean wide = getResources().getConfiguration().screenWidthDp >= 720;
-        int target = Math.min(dp(wide ? 300 : 240),
+        int target = Math.min(dp(wide ? 220 : 240),
                 getResources().getDisplayMetrics().heightPixels * 2 / 5);
         target = Math.min(target, getResources().getDisplayMetrics().widthPixels * 2 / 5);
         int scale = Math.max(1, target / n);

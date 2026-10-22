@@ -8,6 +8,7 @@
     <string name="ui_running">Service running</string>
     <string name="ui_grp_status">Service</string>
     <string name="ui_grp_pair">Pair code</string>
+    <string name="ui_pair_hint">Enter this code in the phone app after choosing Direct</string>
     <string name="ui_grp_addr">Address</string>
     <string name="ui_local_addr">Local address: %1$s  Port: %2$d\nDiscovery port: %3$d\nWeb remote: http://%1$s:%4$d  https://%1$s:%5$d</string>
     <string name="ui_no_network">No network</string>
