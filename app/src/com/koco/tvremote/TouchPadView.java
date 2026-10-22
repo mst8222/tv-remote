@@ -11,38 +11,63 @@ import android.view.MotionEvent;
 import android.view.View;
 
 /**
- * SPEC-023：手机端触控板视图。
+ * 手机端触控板视图（SPEC-028 触摸 + SPEC-029 鼠标）。
  *
- * 纯手势视图，不依赖系统控件；通过 Sink 把判定结果交给直连或蓝牙通道：
- *   单指拖动 → 移动光标；点按 → 单击；按住不动到阈值 → 长按；
- *   移动后按住 → 拖动；双指上下滑 → 滚动。
+ * 两种模式共用同一个视图，由 setMouseMode 切换：
+ *   触摸（默认）：触控板是盒子屏幕的映射面，按下位置按万分比换算成盒子坐标，
+ *     点按/长按/滑动直接映射到盒子同一位置，不累计相对位移、不显示光标；
+ *   鼠标：手指拖动按 1.5 倍增益换算相对位移移动盒端光标，点按为单击，
+ *     按住不动为长按，双指上下滑动为滚动，适合绝对触摸失效的盒子。
  *
- * 长按在两个通道的时机不同，由 Sink.armLongPress() 的返回值区分：
- *   蓝牙返回 true：到点立即按下左键（盒子端从按下时刻再计 500ms）；
- *   直连返回 false：到点只进入待定态，抬起未移动时才发 MLONG。
+ * 触摸判定：未超过 8dp 抬起 → 绝对点按；按住 500ms → 绝对长按；
+ *   移动超过 8dp 后抬起 → 绝对滑动；第二根手指落下取消本次手势。
+ * 鼠标判定：未超过 8dp 抬起 → 单击；按住 500ms 未移动 → 长按（抬起时发送）；
+ *   长按待定期间移动 → 先按下左键转拖动，抬起时释放。
  */
 public class TouchPadView extends View {
 
     public interface Sink {
+        // ---- 触摸模式：绝对坐标，x/y 为 0..10000 的归一化屏幕坐标 ----
+
+        /** 绝对点按 */
+        void tap(int x, int y);
+
+        /** 绝对长按 */
+        void longPress(int x, int y);
+
+        /** 绝对滑动，坐标归一化，时长毫秒 */
+        void swipe(int x1, int y1, int x2, int y2, long ms);
+
+        // ---- 鼠标模式：相对位移与光标操作 ----
+
+        /** 相对移动光标 */
         void move(int dx, int dy);
 
+        /** 光标处单击 */
         void tap();
 
+        /** 光标处长按 */
         void longTap();
 
+        /** 按下左键（拖动开始） */
         void press();
 
+        /** 释放左键 */
         void release();
 
+        /** 滚动，正数向下/向前 */
         void scroll(int steps);
-
-        /** 到长按定时点调用：蓝牙立即按下并返回 true；直连只返回 false */
-        boolean armLongPress();
     }
 
     private static final float SLOP_DP = 8;
     private static final float MOVE_GAIN = 1.5f;
     private static final float SCROLL_UNIT_DP = 24;
+    /** 长按判定阈值，与盒端 600ms 长按手势匹配 */
+    private static final long LONG_PRESS_MS = 500;
+    private static final long SWIPE_MIN_MS = 50;
+    private static final long SWIPE_MAX_MS = 1500;
+    /** 鼠标模式滚动最小间隔 */
+    private static final long SCROLL_MIN_MS = 100;
 
     private static final int BG_COLOR = 0xFF1B2432;
     private static final int STROKE_COLOR = 0xFF2A3547;
@@ -50,24 +75,22 @@ public class TouchPadView extends View {
     private static final int SUB = 0xFF8A94A6;
 
     private static final int STATE_IDLE = 0;
-    /** 单指按下，尚未超过滑动阈值 */
+    /** 单指按下，尚未判定点按/长按/滑动 */
     private static final int STATE_TOUCH = 1;
-    /** 单指移动光标 */
+    /** 鼠标模式：单指移动光标 */
     private static final int STATE_MOVE = 2;
-    /** 拖动（左键已按下） */
+    /** 鼠标模式：拖动（左键已按下） */
     private static final int STATE_DRAG = 3;
-    /** 直连长按待定：到点未发命令，抬起未移动才发 MLONG */
+    /** 鼠标模式：长按待定，抬起未移动才发送长按 */
     private static final int STATE_LONG_PENDING = 4;
-    /** 蓝牙长按已按下左键 */
+    /** 触摸模式：长按已发送，本次手势不再产生命令 */
     private static final int STATE_LONG_HELD = 5;
-    /** 双指滚动 */
+    /** 鼠标模式：双指滚动 */
     private static final int STATE_SCROLL = 6;
-    /** 多指手势已结束，等待全部抬起 */
+    /** 多指手势已结束或取消，等待全部抬起 */
     private static final int STATE_CANCELLED = 7;
 
     private final Sink sink;
-    private long longArmMs;
-    private long scrollMinMs;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private final float den;
@@ -75,14 +98,18 @@ public class TouchPadView extends View {
     private final float scrollUnitPx;
     private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
+
+    private boolean mouseMode = false;
 
     private int state = STATE_IDLE;
     private boolean touched = false;
     private boolean moved = false;
     private float downX, downY;
     private float lastX, lastY;
+    private long downAt;
     private float moveAccX, moveAccY;
     private float scrollAccum;
     private float scrollLastY;
@@ -91,20 +118,22 @@ public class TouchPadView extends View {
     private String hintTop = "";
     private String hintBottom = "";
 
-    private final Runnable longTask;
+    private final Runnable touchLongTask;
+    private final Runnable mouseLongTask;
 
-    public TouchPadView(Context c, Sink sink, long longArmMs, long scrollMinMs) {
+    public TouchPadView(Context c, Sink sink) {
         super(c);
         this.sink = sink;
-        this.longArmMs = longArmMs;
-        this.scrollMinMs = scrollMinMs;
-        longTask = () -> {
-            if (state != STATE_TOUCH || moved) return;
-            if (sink.armLongPress()) {
-                state = STATE_LONG_HELD;
-            } else {
-                state = STATE_LONG_PENDING;
-            }
+        touchLongTask = () -> {
+            if (mouseMode || state != STATE_TOUCH || moved) return;
+            state = STATE_LONG_HELD;
+            sink.longPress(normX(downX), normY(downY));
+            invalidate();
+        };
+        mouseLongTask = () -> {
+            if (!mouseMode || state != STATE_TOUCH || moved) return;
+            // 直连长按：到点只进入待定态，抬起未移动才发送 MLONG
+            state = STATE_LONG_PENDING;
             invalidate();
         };
         den = getResources().getDisplayMetrics().density;
@@ -116,11 +145,21 @@ public class TouchPadView extends View {
         strokePaint.setColor(STROKE_COLOR);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(Math.max(1, den));
+        dotPaint.setColor(ACCENT);
+        dotPaint.setStyle(Paint.Style.FILL);
         textPaint.setColor(SUB);
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setTextSize(12 * getResources().getDisplayMetrics().scaledDensity);
         setClickable(true);
         setContentDescription(getResources().getString(R.string.input_touchpad));
+    }
+
+    /** 切换触摸（绝对点按）/ 鼠标（相对移动光标）手势 */
+    public void setMouseMode(boolean mouse) {
+        if (mouseMode == mouse) return;
+        reset();
+        mouseMode = mouse;
+        invalidate();
     }
 
     public void setHintLines(String top, String bottom) {
@@ -129,22 +168,18 @@ public class TouchPadView extends View {
         invalidate();
     }
 
-    /** 切换连接方式时更新长按定时点与滚动最小间隔（蓝牙 350/40，直连 500/100） */
-    public void setTiming(long longArmMs, long scrollMinMs) {
-        this.longArmMs = longArmMs;
-        this.scrollMinMs = scrollMinMs;
-    }
-
     /** 退出触控板、切设备、断开连接时调用：释放按压并中止本次手势 */
     public void reset() {
-        handler.removeCallbacks(longTask);
-        if (state == STATE_DRAG || state == STATE_LONG_HELD) sink.release();
+        handler.removeCallbacks(touchLongTask);
+        handler.removeCallbacks(mouseLongTask);
+        // 仅鼠标模式需要补发左键释放；触摸模式的长按已直接发送绝对命令
+        if (mouseMode && (state == STATE_DRAG || state == STATE_LONG_HELD)) sink.release();
         state = STATE_IDLE;
         touched = false;
         moved = false;
-        scrollAccum = 0;
         moveAccX = 0;
         moveAccY = 0;
+        scrollAccum = 0;
         invalidate();
     }
 
@@ -162,25 +197,104 @@ public class TouchPadView extends View {
         float inset = strokePaint.getStrokeWidth() / 2;
         rect.inset(inset, inset);
         strokePaint.setColor(touched ? ACCENT : STROKE_COLOR);
-        canvas.drawRoundRect(rect, r - inset, r - inset, strokePaint);
+        canvas.drawRoundRect(rect, r, r, strokePaint);
+
+        // 触摸反馈：在按下的位置画一个点，提示「点哪打哪」；鼠标模式不画
+        if (!mouseMode && touched && state != STATE_IDLE) {
+            float r2 = 7 * den;
+            canvas.drawCircle(lastX, lastY, r2, dotPaint);
+        }
 
         float cx = getWidth() / 2f;
         float cy = getHeight() / 2f;
-        float line = textPaint.getTextSize() * 1.5f;
-        canvas.drawText(hintTop, cx, cy - line / 4, textPaint);
-        canvas.drawText(hintBottom, cx, cy - line / 4 + line, textPaint);
+        float gap = 14 * den;
+        if (!hintTop.isEmpty() && !hintBottom.isEmpty()) {
+            canvas.drawText(hintTop, cx, cy - gap / 2, textPaint);
+            canvas.drawText(hintBottom, cx, cy + gap + textPaint.getTextSize(), textPaint);
+        } else if (!hintTop.isEmpty()) {
+            canvas.drawText(hintTop, cx, cy + textPaint.getTextSize() / 3, textPaint);
+        }
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         getParent().requestDisallowInterceptTouchEvent(true);
+        return mouseMode ? onMouseTouch(e) : onTouchTouch(e);
+    }
+
+    // ---------------- 触摸模式（SPEC-028 绝对映射） ----------------
+
+    private boolean onTouchTouch(MotionEvent e) {
+        switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                if (getWidth() <= 0 || getHeight() <= 0) return false;
+                state = STATE_TOUCH;
+                touched = true;
+                moved = false;
+                downX = lastX = e.getX();
+                downY = lastY = e.getY();
+                downAt = SystemClock.uptimeMillis();
+                handler.postDelayed(touchLongTask, LONG_PRESS_MS);
+                invalidate();
+                return true;
+
+            case MotionEvent.ACTION_POINTER_DOWN:
+                // 第二根手指落下：取消本次手势，不发命令
+                handler.removeCallbacks(touchLongTask);
+                state = STATE_CANCELLED;
+                moved = false;
+                invalidate();
+                return true;
+
+            case MotionEvent.ACTION_MOVE:
+                if (state == STATE_TOUCH) {
+                    lastX = e.getX();
+                    lastY = e.getY();
+                    if (!moved && Math.hypot(lastX - downX, lastY - downY) > slopPx) {
+                        moved = true;
+                        handler.removeCallbacks(touchLongTask);
+                        invalidate();
+                    }
+                }
+                return true;
+
+            case MotionEvent.ACTION_UP:
+                handler.removeCallbacks(touchLongTask);
+                if (state == STATE_TOUCH) {
+                    float ex = clamp(e.getX(), 0, getWidth());
+                    float ey = clamp(e.getY(), 0, getHeight());
+                    if (moved) {
+                        long ms = Math.max(SWIPE_MIN_MS,
+                                Math.min(SWIPE_MAX_MS, SystemClock.uptimeMillis() - downAt));
+                        sink.swipe(normX(downX), normY(downY), normX(ex), normY(ey), ms);
+                    } else {
+                        sink.tap(normX(downX), normY(downY));
+                    }
+                }
+                reset();
+                return true;
+
+            case MotionEvent.ACTION_CANCEL:
+                reset();
+                return true;
+
+            default:
+                return true;
+        }
+    }
+
+    // ---------------- 鼠标模式（SPEC-029 相对移动光标） ----------------
+
+    private boolean onMouseTouch(MotionEvent e) {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 beginSingle(e.getX(), e.getY());
                 return true;
+
             case MotionEvent.ACTION_POINTER_DOWN:
                 beginScroll(e);
                 return true;
+
             case MotionEvent.ACTION_MOVE:
                 if (state == STATE_SCROLL) {
                     doScroll(e);
@@ -188,23 +302,30 @@ public class TouchPadView extends View {
                     doSingleMove(e.getX(), e.getY());
                 }
                 return true;
+
             case MotionEvent.ACTION_POINTER_UP:
-                // 两指手势在手指不足两指时结束；三指抬起一根仍可继续滚动
-                if (state == STATE_SCROLL && e.getPointerCount() - 1 < 2) endScroll();
+                // 手指不足两指时结束滚动；三指抬起一根仍可继续
+                if (state == STATE_SCROLL && e.getPointerCount() - 1 < 2) {
+                    state = STATE_CANCELLED;
+                    scrollAccum = 0;
+                }
                 return true;
+
             case MotionEvent.ACTION_UP:
                 endSingle();
                 return true;
+
             case MotionEvent.ACTION_CANCEL:
-                cancelAll();
+                reset();
                 return true;
+
             default:
                 return true;
         }
     }
 
     private void beginSingle(float x, float y) {
-        handler.removeCallbacks(longTask);
+        handler.removeCallbacks(mouseLongTask);
         touched = true;
         moved = false;
         state = STATE_TOUCH;
@@ -215,7 +336,7 @@ public class TouchPadView extends View {
         moveAccX = 0;
         moveAccY = 0;
         scrollAccum = 0;
-        handler.postDelayed(longTask, longArmMs);
+        handler.postDelayed(mouseLongTask, LONG_PRESS_MS);
         invalidate();
     }
 
@@ -230,9 +351,9 @@ public class TouchPadView extends View {
             float dy = y - downY;
             if (Math.hypot(dx, dy) <= slopPx) return;
             moved = true;
-            handler.removeCallbacks(longTask);
+            handler.removeCallbacks(mouseLongTask);
             if (state == STATE_LONG_PENDING) {
-                // 直连：长按待定期间移动转为拖动
+                // 长按待定期间移动转为拖动
                 sink.press();
                 state = STATE_DRAG;
             } else if (state == STATE_LONG_HELD) {
@@ -262,7 +383,7 @@ public class TouchPadView extends View {
     }
 
     private void beginScroll(MotionEvent e) {
-        handler.removeCallbacks(longTask);
+        handler.removeCallbacks(mouseLongTask);
         if (state == STATE_DRAG || state == STATE_LONG_HELD) sink.release();
         state = STATE_SCROLL;
         touched = true;
@@ -280,23 +401,16 @@ public class TouchPadView extends View {
         int steps = (int) (-scrollAccum / scrollUnitPx);
         if (steps == 0) return;
         long now = SystemClock.uptimeMillis();
-        if (now - lastScrollAt < scrollMinMs) return;
+        if (now - lastScrollAt < SCROLL_MIN_MS) return;
         steps = Math.max(-5, Math.min(5, steps));
         sink.scroll(steps);
         scrollAccum += steps * scrollUnitPx;
         lastScrollAt = now;
     }
 
-    private void endScroll() {
-        state = STATE_CANCELLED;
-        scrollAccum = 0;
-    }
-
     private void endSingle() {
-        handler.removeCallbacks(longTask);
-        if (state == STATE_DRAG) {
-            sink.release();
-        } else if (state == STATE_LONG_HELD) {
+        handler.removeCallbacks(mouseLongTask);
+        if (state == STATE_DRAG || state == STATE_LONG_HELD) {
             sink.release();
         } else if (state == STATE_LONG_PENDING) {
             sink.longTap();
@@ -304,21 +418,7 @@ public class TouchPadView extends View {
             // 双击由盒子/应用按两次连续单击自行识别
             sink.tap();
         }
-        state = STATE_IDLE;
-        touched = false;
-        moved = false;
-        scrollAccum = 0;
-        invalidate();
-    }
-
-    private void cancelAll() {
-        handler.removeCallbacks(longTask);
-        if (state == STATE_DRAG || state == STATE_LONG_HELD) sink.release();
-        state = STATE_IDLE;
-        touched = false;
-        moved = false;
-        scrollAccum = 0;
-        invalidate();
+        reset();
     }
 
     private static float avgY(MotionEvent e) {
@@ -326,5 +426,21 @@ public class TouchPadView extends View {
         float sum = 0;
         for (int i = 0; i < n; i++) sum += e.getY(i);
         return sum / n;
+    }
+
+    private float clamp(float v, float min, float max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    private int normX(float x) {
+        int w = getWidth();
+        if (w <= 0) return 0;
+        return Math.round(clamp(x, 0, w) * 10000f / w);
+    }
+
+    private int normY(float y) {
+        int h = getHeight();
+        if (h <= 0) return 0;
+        return Math.round(clamp(y, 0, h) * 10000f / h);
     }
 }

@@ -47,7 +47,8 @@
     </div>
     <div class="seg">
       <button id="segDpad" class="on" data-i18n="modeDpad">方向盘</button>
-      <button id="segPad" data-i18n="modePad">触控板</button>
+      <button id="segPad" data-i18n="modeTouch">触摸</button>
+      <button id="segMouse" data-i18n="modeMouse">鼠标</button>
     </div>
     <div id="dpad" class="dpad">
       <button class="d up" data-key="19" aria-label="up">▲</button>
@@ -57,8 +58,8 @@
       <button class="d down" data-key="20" aria-label="down">▼</button>
     </div>
     <div id="touchpad" class="touchpad" hidden>
-      <span class="padTip" data-i18n="padTip1">拖动移动光标 · 点按确定</span>
-      <span class="padTip" data-i18n="padTip2">长按菜单 · 双指滑动滚动</span>
+      <span id="padTip1" class="padTip">点按对应位置 · 长按菜单</span>
+      <span id="padTip2" class="padTip">上下滑动列表</span>
     </div>
     <div class="row sys">
       <button data-key="4" aria-label="back">←</button>

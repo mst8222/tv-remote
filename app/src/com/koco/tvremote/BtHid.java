@@ -265,22 +265,17 @@ public class BtHid {
      * 避免 HID 队列堆积造成光标的滞后漂移。
      */
     public boolean sendMouseMove(int dx, int dy) {
-        return sendMouseMove(dx, dy, 20);
-    }
-
-    /** SPEC-023 触控板：单次上限可放大，超出部分留到下一周期补发，不丢位移 */
-    public boolean sendMouseMove(int dx, int dy, int maxStep) {
         if (!isReady()) return false;
         if (target == null) return false;
         pendX += dx;
         pendY += dy;
         long now = SystemClock.uptimeMillis();
         if (now - lastMouseAt < 20) {
-            scheduleDrain(maxStep);
+            scheduleDrain(20);
             return true;
         }
         lastMouseAt = now;
-        return flushMove(maxStep);
+        return flushMove(20);
     }
 
     /** 取当前应发送的一段位移，保留超出上限的余量 */
@@ -320,22 +315,6 @@ public class BtHid {
         mouseButtons = buttons & 0x03;
         lastMouseAt = SystemClock.uptimeMillis();
         boolean ok = sendMouseReport(d, x, y, 0);
-        if (pendX != 0 || pendY != 0) scheduleDrain(127);
-        return ok;
-    }
-
-    /** SPEC-023：滚轮，正数向下/向前；先补发已累计位移再发滚轮 */
-    public boolean sendMouseScroll(int notches) {
-        if (!isReady()) return false;
-        BluetoothDevice d = target;
-        if (d == null) return false;
-        int x = clampMove(pendX, 127);
-        int y = clampMove(pendY, 127);
-        pendX -= x;
-        pendY -= y;
-        lastMouseAt = SystemClock.uptimeMillis();
-        int wheel = Math.max(-5, Math.min(5, notches));
-        boolean ok = sendMouseReport(d, x, y, wheel);
         if (pendX != 0 || pendY != 0) scheduleDrain(127);
         return ok;
     }

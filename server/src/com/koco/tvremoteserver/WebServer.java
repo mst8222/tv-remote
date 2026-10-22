@@ -267,6 +267,7 @@ public class WebServer {
                 return plain(commands.handle("APP " + token + " " + pkg, ip));
             }
 
+            // SPEC-029：网页触控板鼠标模式（相对位移 + 光标操作）
             if (path.equals("/api/move")) {
                 if (!post) return Response.text(405, "Method Not Allowed");
                 Integer dx = jsonInt(body, "dx");
@@ -282,7 +283,6 @@ public class WebServer {
                 return plain(commands.handle("MCLICK " + token + " " + (down ? 1 : 0), ip));
             }
 
-            // SPEC-025：网页触控板，复用 SPEC-023 的盒端命令
             if (path.equals("/api/tap")) {
                 if (!post) return Response.text(405, "Method Not Allowed");
                 return plain(commands.handle("MTAP " + token, ip));
@@ -293,16 +293,41 @@ public class WebServer {
                 return plain(commands.handle("MLONG " + token, ip));
             }
 
-            if (path.equals("/api/hide")) {
-                if (!post) return Response.text(405, "Method Not Allowed");
-                return plain(commands.handle("MHIDE " + token, ip));
-            }
-
             if (path.equals("/api/scroll")) {
                 if (!post) return Response.text(405, "Method Not Allowed");
                 Integer steps = jsonInt(body, "steps");
                 if (steps == null) return Response.json(200, err("arg"), true);
                 return plain(commands.handle("SCROLL " + token + " " + steps, ip));
+            }
+
+            // SPEC-028：网页触控板绝对触摸（归一化坐标 0..10000）
+            if (path.equals("/api/tapn") || path.equals("/api/longn")) {
+                if (!post) return Response.text(405, "Method Not Allowed");
+                Integer x = jsonInt(body, "x");
+                Integer y = jsonInt(body, "y");
+                if (x == null || y == null) return Response.json(200, err("arg"), true);
+                String cmd = (path.equals("/api/tapn") ? "MTAPN " : "MLONGN ")
+                        + token + " " + x + " " + y;
+                return plain(commands.handle(cmd, ip));
+            }
+
+            if (path.equals("/api/swipen")) {
+                if (!post) return Response.text(405, "Method Not Allowed");
+                Integer x1 = jsonInt(body, "x1");
+                Integer y1 = jsonInt(body, "y1");
+                Integer x2 = jsonInt(body, "x2");
+                Integer y2 = jsonInt(body, "y2");
+                Integer ms = jsonInt(body, "ms");
+                if (x1 == null || y1 == null || x2 == null || y2 == null || ms == null) {
+                    return Response.json(200, err("arg"), true);
+                }
+                return plain(commands.handle("MSWIPEN " + token + " "
+                        + x1 + " " + y1 + " " + x2 + " " + y2 + " " + ms, ip));
+            }
+
+            if (path.equals("/api/hide")) {
+                if (!post) return Response.text(405, "Method Not Allowed");
+                return plain(commands.handle("MHIDE " + token, ip));
             }
 
             if (path.equals("/api/apps")) {

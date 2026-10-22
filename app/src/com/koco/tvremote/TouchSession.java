@@ -9,11 +9,11 @@ import java.net.Socket;
 import java.util.ArrayDeque;
 
 /**
- * SPEC-023：触控板专用的直连长连接会话。
+ * 触控板专用的直连长连接会话（SPEC-028 触摸 + SPEC-029 鼠标）。
  *
- * 与 SPEC-011 的「每条命令短连接」不同，触控板移动频率高（20ms 级），
- * 逐条建连既慢又会把服务器刷满，因此单开一条连接 + 独立发送线程：
- *   - 移动只累加，每 FLUSH_MS 合并发送，单轴超过 127 的部分留到下一次，不丢位移；
+ * 触摸模式一次手势只对应一条绝对坐标命令；鼠标模式移动频率高（20ms 级），
+ * 因此单开一条连接 + 独立发送线程：
+ *   - 鼠标移动只累加，每 FLUSH_MS 合并发送，单轴超过 127 的部分留到下一次，不丢位移；
  *   - 点击/长按/按下/抬起/滚动按顺序执行，执行前先发送已累计的移动，保证顺序；
  *   - IDLE_CLOSE_MS 无命令自动关闭，其它按键仍走 LanClient 短连接；
  *   - 连接失败自动重连一次，错误经 Listener 回调并节流。
@@ -27,10 +27,11 @@ public class TouchSession {
 
     private static final int CONNECT_TIMEOUT_MS = 3000;
     private static final int READ_TIMEOUT_MS = 4000;
-    /** 移动合并发送周期 */
+    /** 鼠标移动合并发送周期 */
     private static final long FLUSH_MS = 20;
     /** 空闲自动关闭，早于服务器 30 秒回收 */
     private static final long IDLE_CLOSE_MS = 20000;
+    /** MOVE 单轴上限，超出部分分批发送 */
     private static final int MOVE_MAX = 127;
     private static final long ERROR_THROTTLE_MS = 2000;
 
@@ -40,6 +41,7 @@ public class TouchSession {
     private final Listener listener;
 
     private final ArrayDeque<String> queue = new ArrayDeque<>();
+    /** 鼠标模式待发送的累计位移 */
     private int pendX = 0;
     private int pendY = 0;
 
@@ -63,42 +65,65 @@ public class TouchSession {
         worker.start();
     }
 
+    /** 鼠标模式：累加相对位移，由发送线程每 20ms 合并发出 */
     public void move(int dx, int dy) {
         if (dx == 0 && dy == 0) return;
         synchronized (queue) {
+            if (closed) return;
             pendX += dx;
             pendY += dy;
+            queue.notifyAll();
         }
     }
 
+    /** 鼠标模式：光标处单击 */
     public void tap() {
         enqueue("MTAP " + token);
     }
 
-    /** 0 位移，仅用于让盒子端显示光标并校验无障碍状态 */
-    public void showCursor() {
-        enqueue("MOVE " + token + " 0 0");
-    }
-
+    /** 鼠标模式：光标处长按 */
     public void longTap() {
         enqueue("MLONG " + token);
     }
 
+    /** 鼠标模式：按下左键 */
     public void press() {
         enqueue("MCLICK " + token + " 1");
     }
 
+    /** 鼠标模式：释放左键 */
     public void release() {
         enqueue("MCLICK " + token + " 0");
     }
 
+    /** 鼠标模式：滚动，正数向下/向前 */
     public void scroll(int steps) {
         int s = Math.max(-5, Math.min(5, steps));
         if (s == 0) return;
         enqueue("SCROLL " + token + " " + s);
     }
 
-    /** 退出触控板：让盒端立即隐藏光标，不等空闲自动回收 */
+    /** 鼠标模式：0 位移，让盒端显示光标并校验无障碍状态 */
+    public void showCursor() {
+        enqueue("MOVE " + token + " 0 0");
+    }
+
+    /** 绝对点按，x/y 为 0..10000 的归一化屏幕坐标 */
+    public void tapAt(int x, int y) {
+        enqueue("MTAPN " + token + " " + x + " " + y);
+    }
+
+    /** 绝对长按，x/y 为 0..10000 的归一化屏幕坐标 */
+    public void longAt(int x, int y) {
+        enqueue("MLONGN " + token + " " + x + " " + y);
+    }
+
+    /** 绝对滑动，坐标归一化，时长 50..1500ms */
+    public void swipe(int x1, int y1, int x2, int y2, long ms) {
+        enqueue("MSWIPEN " + token + " " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + ms);
+    }
+
+    /** 进入/退出触控板：让盒端立即隐藏可能残留的旧光标 */
     public void hide() {
         enqueue("MHIDE " + token);
     }
@@ -112,8 +137,8 @@ public class TouchSession {
     }
 
     /**
-     * 结束会话：先等待队列排空（最多 500ms），确保退出触控板前发出的
-     * MCLICK 0 真正到达盒子，避免触摸卡在按下状态；随后关闭连接。
+     * 结束会话：先等待队列与累计位移排空（最多 500ms），确保退出触控板前
+     * 发出的 MCLICK 0 真正到达盒子，避免触摸卡在按下状态；随后关闭连接。
      */
     public void close() {
         synchronized (queue) {
@@ -181,6 +206,7 @@ public class TouchSession {
                 lastActive = System.currentTimeMillis();
                 sendWithRetry(cmd);
             }
+            // 空闲超时：关闭连接，下一条命令重新建连
             if (System.currentTimeMillis() - lastActive > IDLE_CLOSE_MS) {
                 closeSocket();
                 lastActive = System.currentTimeMillis();

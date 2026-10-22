@@ -15,12 +15,16 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
+
+import java.util.List;
 
 /**
  * 盒端非 root 注入服务（SPEC-014）。
@@ -245,6 +249,151 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
         TvRemoteAccessibilityService s = instance;
         if (s == null) return RES_NO_A11Y;
         s.ui.post(s::cleanupAir);
+        return RES_OK;
+    }
+
+    // ---------------- SPEC-028 绝对触摸 ----------------
+
+    /** 绝对点按：nx/ny 为 0..10000 的归一化屏幕坐标 */
+    public static int touchTap(int nx, int ny) {
+        TvRemoteAccessibilityService s = instance;
+        if (s == null) return RES_NO_A11Y;
+        return s.absoluteTap(nx, ny);
+    }
+
+    /** 绝对长按：nx/ny 为 0..10000 的归一化屏幕坐标 */
+    public static int touchLong(int nx, int ny) {
+        TvRemoteAccessibilityService s = instance;
+        if (s == null) return RES_NO_A11Y;
+        return s.absoluteLong(nx, ny);
+    }
+
+    /** 绝对滑动：起点/终点归一化坐标 + 时长（毫秒） */
+    public static int touchSwipe(int nx1, int ny1, int nx2, int ny2, int ms) {
+        TvRemoteAccessibilityService s = instance;
+        if (s == null) return RES_NO_A11Y;
+        return s.absoluteSwipe(nx1, ny1, nx2, ny2, ms);
+    }
+
+    /**
+     * 当前屏幕像素尺寸。
+     * H96 实测：服务进程的 Resources / Display / 窗口指标仍是物理分辨率 1280x960，
+     * 而节点边界与手势坐标按窗口覆盖后的 2048x1536 计算，直接用前者会让
+     * 点击落点整体偏移。因此以当前窗口根节点边界（与节点同一坐标系）为准。
+     */
+    private int[] screenSize() {
+        int w = 0;
+        int h = 0;
+        // 优先用当前窗口根节点边界：它与节点坐标同一坐标系（窗口覆盖后的真实分辨率）
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            Rect r = new Rect();
+            root.getBoundsInScreen(r);
+            w = r.right;
+            h = r.bottom;
+        }
+        if (w <= 0 || h <= 0) {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null) {
+                Rect r = new Rect();
+                for (AccessibilityWindowInfo win : windows) {
+                    win.getBoundsInScreen(r);
+                    w = Math.max(w, r.right);
+                    h = Math.max(h, r.bottom);
+                }
+            }
+        }
+        if (w <= 0 || h <= 0) {
+            DisplayMetrics dm = new DisplayMetrics();
+            WindowManager wmService = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+            if (wmService != null) {
+                wmService.getDefaultDisplay().getRealMetrics(dm);
+            }
+            w = dm.widthPixels;
+            h = dm.heightPixels;
+        }
+        return new int[]{w, h};
+    }
+
+    /** 归一化坐标转当前显示像素坐标，边界夹取到屏幕内 */
+    private float[] toScreen(int nx, int ny) {
+        int[] size = screenSize();
+        int w = size[0];
+        int h = size[1];
+        return new float[]{
+                nx * (w - 1) / 10000f,
+                ny * (h - 1) / 10000f
+        };
+    }
+
+    private int absoluteTap(int nx, int ny) {
+        float[] p = toScreen(nx, ny);
+        final float x = p[0];
+        final float y = p[1];
+        AccessibilityNodeInfo node = hitNode(x, y, AccessibilityNodeInfo.ACTION_CLICK);
+        // 跳过整屏可点击容器（桌面根布局常带 clickable，点它不会命中具体条目）
+        if (node != null && !isNearlyFullScreen(node)) {
+            if (node.isFocusable()) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return RES_OK;
+        }
+        // 无命中节点时按触摸点合成手势，和手机点屏幕一致
+        ui.post(() -> dispatchTap(x, y));
+        return RES_OK;
+    }
+
+    /** 节点是否几乎覆盖整块屏幕（>80%），这类容器不应作为点击目标 */
+    private boolean isNearlyFullScreen(AccessibilityNodeInfo node) {
+        Rect r = new Rect();
+        node.getBoundsInScreen(r);
+        int[] size = screenSize();
+        return area(r) > (long) size[0] * size[1] * 8 / 10;
+    }
+
+    private int absoluteLong(int nx, int ny) {
+        float[] p = toScreen(nx, ny);
+        final float x = p[0];
+        final float y = p[1];
+        AccessibilityNodeInfo node = hitNode(x, y, AccessibilityNodeInfo.ACTION_LONG_CLICK);
+        if (node != null) {
+            if (node.isFocusable()) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            if (node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) return RES_OK;
+        }
+        ui.post(() -> dispatchLongPress(x, y));
+        return RES_OK;
+    }
+
+    /**
+     * 绝对滑动：竖直滑动先尝试对起点下方可滚动节点做步进滚动（不依赖合成手势，
+     * 部分固件不支持 dispatchGesture），否则合成从起点到终点的滑动手势。
+     */
+    private int absoluteSwipe(int nx1, int ny1, int nx2, int ny2, int ms) {
+        float[] a = toScreen(nx1, ny1);
+        float[] b = toScreen(nx2, ny2);
+        float dx = b[0] - a[0];
+        float dy = b[1] - a[1];
+        float density = getResources().getDisplayMetrics().density;
+        if (Math.abs(dy) >= Math.abs(dx) && Math.abs(dy) >= 8 * density) {
+            AccessibilityNodeInfo node =
+                    hitNode(a[0], a[1], AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+            if (node != null) {
+                int steps = Math.max(1, Math.min(3,
+                        Math.round(Math.abs(dy) / (80 * density))));
+                int action = dy < 0 ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+                boolean ok = false;
+                for (int i = 0; i < steps; i++) {
+                    if (!node.performAction(action)) break;
+                    ok = true;
+                }
+                if (ok) return RES_OK;
+            }
+        }
+        final float x1 = a[0];
+        final float y1 = a[1];
+        final float x2 = b[0];
+        final float y2 = b[1];
+        final long duration = Math.max(50, Math.min(1500, ms));
+        ui.post(() -> dispatchDrag(x1, y1, x2, y2, duration));
         return RES_OK;
     }
 

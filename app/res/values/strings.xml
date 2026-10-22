@@ -28,10 +28,15 @@
 
     <!-- 触控板（SPEC-023） -->
     <string name="input_dpad">方向盘</string>
+    <!-- 分段文案：触摸为绝对点按，鼠标为相对移动光标（SPEC-029） -->
+    <string name="input_touch">触摸</string>
+    <string name="input_mouse">鼠标</string>
     <string name="input_touchpad">触控板</string>
-    <string name="touchpad_hint_top">拖动移动光标 · 点按确定</string>
-    <string name="touchpad_hint_bottom">双指滑动滚动</string>
-    <string name="touchpad_need_bt">触控板需要先连接蓝牙</string>
+    <string name="touchpad_hint_top">点按对应位置 · 长按菜单</string>
+    <string name="touchpad_hint_bottom">上下滑动列表</string>
+    <string name="touchpad_mouse_hint_top">拖动移动光标 · 点按单击</string>
+    <string name="touchpad_mouse_hint_bottom">按住长按 · 双指滚动</string>
+    <string name="touchpad_lan_only">触控板需使用直连</string>
     <string name="touchpad_need_lan">触控板需要先配对直连</string>
 
     <!-- 应用快捷 -->

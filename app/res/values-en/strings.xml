@@ -28,10 +28,14 @@
 
     <!-- Touchpad (SPEC-023) -->
     <string name="input_dpad">D-pad</string>
+    <string name="input_touch">Touch</string>
+    <string name="input_mouse">Mouse</string>
     <string name="input_touchpad">Touchpad</string>
-    <string name="touchpad_hint_top">Drag to move · Tap to select</string>
-    <string name="touchpad_hint_bottom">Two-finger swipe to scroll</string>
-    <string name="touchpad_need_bt">Touchpad needs a Bluetooth connection first</string>
+    <string name="touchpad_hint_top">Tap where you point · long-press for menu</string>
+    <string name="touchpad_hint_bottom">Swipe up or down to scroll</string>
+    <string name="touchpad_mouse_hint_top">Drag to move cursor · tap to click</string>
+    <string name="touchpad_mouse_hint_bottom">Hold to long-press · two-finger scroll</string>
+    <string name="touchpad_lan_only">Touchpad requires a Direct connection</string>
     <string name="touchpad_need_lan">Touchpad needs a paired Direct connection first</string>
 
     <!-- 应用快捷（应用名不翻译） -->
