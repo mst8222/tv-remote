@@ -1,4 +1,5 @@
 import com.koco.tvremote.LanClient;
+import com.koco.tvremote.TouchSession;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -54,10 +55,14 @@ public class ProtocolTest {
         tc_text_invalid_base64();
         tc_text_empty();
         tc_text_large();
+        tc_text_boundary();
+        tc_text_b64_too_long();
         tc_app_ok();
         tc_app_settings_action();
         tc_app_invalid_pkg();
+        tc_app_pkg_too_long();
         tc_app_wrong_token();
+        tc_pair_lockout();
         tc_list_ok();
         tc_list_wrong_token();
         tc_list_empty();
@@ -72,6 +77,15 @@ public class ProtocolTest {
         tc_keylong_missing_code();
         tc_keylong_wrong_token();
         tc_keylong_a11y_off();
+        tc_move_ok();
+        tc_move_invalid();
+        tc_move_a11y_off();
+        tc_mtap();
+        tc_mlong();
+        tc_mclick();
+        tc_scroll();
+        tc_mhide();
+        tc_touch_session();
         tc_a11y_off();
         tc_unknown_cmd();
         tc_empty_line();
@@ -88,6 +102,7 @@ public class ProtocolTest {
         tc_discover_no_broadcast();
         tc_discover_found();
         tc_discover_other_prefix();
+        tc_discover_dedupe_multi();
 
         // NFR
         tc_rtt();
@@ -117,7 +132,9 @@ public class ProtocolTest {
     }
 
     static void tc_pair_wrong_code() throws Exception {
+        box.resetPairGuard();
         eq("pair_wrong_code", "ERR badcode", rawCmd("PAIR 654321"));
+        box.resetPairGuard();
     }
 
     static void tc_pair_missing_code() throws Exception {
@@ -212,16 +229,36 @@ public class ProtocolTest {
     }
 
     static void tc_text_large() throws Exception {
-        // 8KB 文本（中文约 2700 字）不应崩溃，照常 OK —— v1.0 无长度上限（SPEC-006 拟收紧）
+        // SPEC-006：解码后超过 256 字符返回 ERR toolong
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 2700; i++) sb.append("测");
+        for (int i = 0; i < 257; i++) sb.append("测");
         LanClient lan = newClient();
         try {
-            lan.text(sb.toString());
-            record("text_large_8kb", true, "8KB 文本应返回 OK");
+            expectThrow("text_large_err_toolong", "ERR toolong", () -> lan.text(sb.toString()));
         } finally {
             lan.close();
         }
+    }
+
+    /** SPEC-006：边界值 256 字符应通过 */
+    static void tc_text_boundary() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 256; i++) sb.append("测");
+        LanClient lan = newClient();
+        try {
+            lan.text(sb.toString());
+            record("text_boundary_256_ok", true, "解码后 256 字符应返回 OK");
+        } finally {
+            lan.close();
+        }
+    }
+
+    /** SPEC-006：base64 段超过 2048 直接拒绝，不做解码 */
+    static void tc_text_b64_too_long() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 2100; i++) sb.append('A');
+        eq("text_b64_too_long", "ERR toolong",
+                rawCmd("TEXT " + box.token() + " " + sb));
     }
 
     static void tc_app_ok() throws Exception {
@@ -249,15 +286,37 @@ public class ProtocolTest {
     static void tc_app_invalid_pkg() throws Exception {
         LanClient lan = newClient();
         try {
-            expectThrow("app_invalid_pkg", "ERR exec", () -> lan.launch("bad pkg;reboot"));
+            // SPEC-006：非法包名在协议层直接按参数错误拒绝
+            expectThrow("app_invalid_pkg", "ERR arg", () -> lan.launch("bad pkg;reboot"));
         } finally {
             lan.close();
         }
     }
 
+    /** SPEC-006：包名长度上限 128 */
+    static void tc_app_pkg_too_long() throws Exception {
+        StringBuilder sb = new StringBuilder("com.example.");
+        while (sb.length() <= 128) sb.append('a');
+        eq("app_pkg_too_long", "ERR arg", rawCmd("APP " + box.token() + " " + sb));
+    }
+
     static void tc_app_wrong_token() throws Exception {
         eq("app_wrong_token", "ERR auth",
                 rawCmd("APP deadbeef com.example.tvapp"));
+    }
+
+    /** SPEC-006：同一 IP 连续 5 次错误配对码后锁定，锁定期正确码也拒绝 */
+    static void tc_pair_lockout() throws Exception {
+        box.resetPairGuard();
+        try {
+            for (int i = 1; i <= 5; i++) {
+                eq("pair_fail_" + i, "ERR badcode", rawCmd("PAIR 000000"));
+            }
+            eq("pair_locked_after_5", "ERR locked", rawCmd("PAIR 000000"));
+            eq("pair_correct_while_locked", "ERR locked", rawCmd("PAIR 123456"));
+        } finally {
+            box.resetPairGuard();
+        }
     }
 
     static void tc_unknown_cmd() throws Exception {
@@ -351,6 +410,7 @@ public class ProtocolTest {
     /** SPEC-014：未知 keycode 明确返回 ERR cmd，不再假装执行成功 */
     static void tc_key_unsupported() throws Exception {
         eq("key_unsupported", "ERR cmd", rawCmd("KEY " + box.token() + " 99"));
+        eq("key_unsupported_numeric", "ERR cmd", rawCmd("KEY " + box.token() + " 9999"));
     }
 
     /** SPEC-018：KEYLONG 仅支持 OK（23），走无障碍 ACTION_LONG_CLICK */
@@ -469,6 +529,146 @@ public class ProtocolTest {
                 () -> LanClient.pair("203.0.113.1", 8899, "123456", 800));
     }
 
+    // ---------------- SPEC-021 飞鼠 ----------------
+
+    static void tc_move_ok() throws Exception {
+        eq("move_ok", "OK", rawCmd("MOVE " + box.token() + " 3 -4"));
+        check("move_record",
+                box.lastDx == 3 && box.lastDy == -4,
+                "服务端应记录位移 3/-4，实际 " + box.lastDx + "/" + box.lastDy);
+        // SPEC-023：单轴上限放宽到 127
+        eq("move_max_ok", "OK", rawCmd("MOVE " + box.token() + " 127 -127"));
+        check("move_max_record",
+                box.lastDx == 127 && box.lastDy == -127,
+                "服务端应记录位移 127/-127，实际 " + box.lastDx + "/" + box.lastDy);
+    }
+
+    static void tc_move_invalid() throws Exception {
+        eq("move_missing", "ERR arg", rawCmd("MOVE " + box.token()));
+        eq("move_one_arg", "ERR arg", rawCmd("MOVE " + box.token() + " 3"));
+        eq("move_non_numeric", "ERR arg", rawCmd("MOVE " + box.token() + " a b"));
+        eq("move_out_of_range", "ERR arg", rawCmd("MOVE " + box.token() + " 128 0"));
+        eq("move_wrong_token", "ERR auth", rawCmd("MOVE deadbeef 1 1"));
+    }
+
+    static void tc_move_a11y_off() throws Exception {
+        box.a11yEnabled = false;
+        try {
+            eq("move_a11y_off", "ERR a11y", rawCmd("MOVE " + box.token() + " 1 1"));
+            eq("mclick_a11y_off", "ERR a11y", rawCmd("MCLICK " + box.token() + " 1"));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    static void tc_mclick() throws Exception {
+        eq("mclick_up_idle", "OK", rawCmd("MCLICK " + box.token() + " 0"));
+        eq("mclick_down", "OK", rawCmd("MCLICK " + box.token() + " 1"));
+        check("mclick_down_state", box.mouseDown, "按下后应记录 mouseDown=true");
+        eq("mclick_up", "OK", rawCmd("MCLICK " + box.token() + " 0"));
+        check("mclick_up_state", !box.mouseDown, "抬起后应记录 mouseDown=false");
+        eq("mclick_invalid", "ERR arg", rawCmd("MCLICK " + box.token() + " 2"));
+        eq("mclick_missing", "ERR arg", rawCmd("MCLICK " + box.token()));
+        eq("mclick_wrong_token", "ERR auth", rawCmd("MCLICK deadbeef 1"));
+    }
+
+    /** SPEC-023：光标处单击 */
+    static void tc_mtap() throws Exception {
+        box.resetTouchRecords();
+        eq("mtap_ok", "OK", rawCmd("MTAP " + box.token()));
+        check("mtap_record", box.tapCount == 1, "应记录一次单击，实际 " + box.tapCount);
+        eq("mtap_wrong_token", "ERR auth", rawCmd("MTAP deadbeef"));
+        box.a11yEnabled = false;
+        try {
+            eq("mtap_a11y_off", "ERR a11y", rawCmd("MTAP " + box.token()));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-023：光标处长按 */
+    static void tc_mlong() throws Exception {
+        box.resetTouchRecords();
+        eq("mlong_ok", "OK", rawCmd("MLONG " + box.token()));
+        check("mlong_record", box.longTapCount == 1,
+                "应记录一次长按，实际 " + box.longTapCount);
+        eq("mlong_wrong_token", "ERR auth", rawCmd("MLONG deadbeef"));
+        box.a11yEnabled = false;
+        try {
+            eq("mlong_a11y_off", "ERR a11y", rawCmd("MLONG " + box.token()));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-023：退出触控板立即隐藏光标 */
+    static void tc_mhide() throws Exception {
+        box.resetTouchRecords();
+        eq("mhide_ok", "OK", rawCmd("MHIDE " + box.token()));
+        check("mhide_record", box.hideCount == 1, "应记录一次隐藏，实际 " + box.hideCount);
+        eq("mhide_extra_arg", "ERR arg", rawCmd("MHIDE " + box.token() + " 1"));
+        eq("mhide_wrong_token", "ERR auth", rawCmd("MHIDE deadbeef"));
+        box.a11yEnabled = false;
+        try {
+            eq("mhide_a11y_off", "ERR a11y", rawCmd("MHIDE " + box.token()));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-023：滚动方向与范围 */
+    static void tc_scroll() throws Exception {
+        box.resetTouchRecords();
+        eq("scroll_ok", "OK", rawCmd("SCROLL " + box.token() + " 1"));
+        check("scroll_record_down", box.lastScroll == 1,
+                "正数应记录为向下/向前，实际 " + box.lastScroll);
+        eq("scroll_up_ok", "OK", rawCmd("SCROLL " + box.token() + " -2"));
+        check("scroll_record_up", box.lastScroll == -2,
+                "负数应记录为向上/向后，实际 " + box.lastScroll);
+        check("scroll_count", box.scrollCount == 2,
+                "两次滚动应记录 2 次，实际 " + box.scrollCount);
+        eq("scroll_max_ok", "OK", rawCmd("SCROLL " + box.token() + " 5"));
+        eq("scroll_over", "ERR arg", rawCmd("SCROLL " + box.token() + " 6"));
+        eq("scroll_under", "ERR arg", rawCmd("SCROLL " + box.token() + " -6"));
+        eq("scroll_non_numeric", "ERR arg", rawCmd("SCROLL " + box.token() + " a"));
+        eq("scroll_missing", "ERR arg", rawCmd("SCROLL " + box.token()));
+        eq("scroll_wrong_token", "ERR auth", rawCmd("SCROLL deadbeef 1"));
+        box.a11yEnabled = false;
+        try {
+            eq("scroll_a11y_off", "ERR a11y", rawCmd("SCROLL " + box.token() + " 1"));
+        } finally {
+            box.a11yEnabled = true;
+        }
+    }
+
+    /** SPEC-023：TouchSession 单连接内连续移动 + 点击 + 滚动全部到达 */
+    static void tc_touch_session() throws Exception {
+        box.resetTouchRecords();
+        int before = box.connectionCount;
+        TouchSession ts = new TouchSession("127.0.0.1", box.port(), box.token(), null);
+        try {
+            ts.move(200, -150); // 超过 127，应分批发送，不丢位移
+            ts.move(10, 10);
+            ts.tap();
+            ts.scroll(2);
+            long end = System.currentTimeMillis() + 3000;
+            while (System.currentTimeMillis() < end
+                    && (box.moveCount < 2 || box.tapCount < 1 || box.scrollCount < 1)) {
+                Thread.sleep(20);
+            }
+            check("touch_session_move", box.moveCount >= 2,
+                    "分批移动应至少发送 2 条 MOVE，实际 " + box.moveCount);
+            check("touch_session_tap", box.tapCount == 1,
+                    "应到达一次 MTAP，实际 " + box.tapCount);
+            check("touch_session_scroll", box.scrollCount == 1 && box.lastScroll == 2,
+                    "应到达一次 SCROLL 2，实际 " + box.scrollCount + "/" + box.lastScroll);
+            check("touch_session_single_conn", box.connectionCount - before == 1,
+                    "同一会话应只建立 1 条连接，实际 " + (box.connectionCount - before));
+        } finally {
+            ts.close();
+        }
+    }
+
     // ---------------- UDP 发现 ----------------
 
     static void tc_discover_no_broadcast() throws Exception {
@@ -503,6 +703,22 @@ public class ProtocolTest {
         sender.join(2000);
         check("discover_other_prefix_ignored", ip == null,
                 "非 TVREMOTE 前缀广播应被忽略，实际 " + ip);
+    }
+
+    /** SPEC-007：两台盒子都能入列，同一 IP 重复广播只保留一条 */
+    static void tc_discover_dedupe_multi() throws Exception {
+        java.util.List<String[]> out = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        LanClient.collectDiscovery("TVREMOTE|8899|BoxA", "192.168.1.10", out, seen);
+        LanClient.collectDiscovery("TVREMOTE|8899|BoxA-dup", "192.168.1.10", out, seen);
+        LanClient.collectDiscovery("TVREMOTE|8899|BoxB", "192.168.1.11", out, seen);
+        LanClient.collectDiscovery("OTHER|1|junk", "192.168.1.12", out, seen);
+        check("discover_multi_count", out.size() == 2,
+                "两台盒子去重后应为 2 条，实际 " + out.size());
+        check("discover_multi_names", out.size() == 2
+                        && "BoxA".equals(out.get(0)[0]) && "BoxB".equals(out.get(1)[0]),
+                "设备名应取广播中的名称，实际 " + (out.size() == 2
+                        ? out.get(0)[0] + "/" + out.get(1)[0] : "条数不符"));
     }
 
     // ---------------- NFR ----------------

@@ -27,6 +27,8 @@ public final class Errors {
         // 直连协议错误（LanClient 把服务器响应原文抛出，形如 "ERR badcode"）
         if (msg.startsWith("ERR ")) {
             if (msg.startsWith("ERR badcode")) return c.getString(R.string.err_badcode);
+            if (msg.startsWith("ERR locked")) return c.getString(R.string.err_locked);
+            if (msg.startsWith("ERR toolong")) return c.getString(R.string.err_toolong);
             if (msg.startsWith("ERR auth")) return c.getString(R.string.err_auth_lost);
             if (msg.startsWith("ERR a11y")) return c.getString(R.string.err_a11y);
             if (msg.startsWith("ERR exec")) return c.getString(R.string.err_exec);

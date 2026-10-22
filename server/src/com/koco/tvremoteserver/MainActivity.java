@@ -2,6 +2,9 @@ package com.koco.tvremoteserver;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
@@ -11,6 +14,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -34,6 +38,10 @@ public class MainActivity extends Activity {
             GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A;
 
     private TextView statusView, ipView, codeView, a11yView, updateView, updateBtn;
+    /** SPEC-024：网页遥控二维码与其提示；qrKey 记录当前二维码对应的 IP + 配对码 */
+    private ImageView qrView;
+    private TextView qrTip;
+    private String qrKey;
     private GradientDrawable dotBg;
     /** 检查到的待安装 Release；为空表示当前没有可下载的新版本 */
     private Updater.Release pendingUpdate;
@@ -90,12 +98,37 @@ public class MainActivity extends Activity {
 
         // 连接地址卡
         LinearLayout addrCard = card(R.string.ui_grp_addr);
+        // 地址文本与二维码并排：横向电视屏宽足够，二维码不会落到可视区域之外
         ipView = new TextView(this);
         ipView.setTextSize(15);
         ipView.setTextColor(TXT);
         ipView.setLineSpacing(dp(4), 1f);
         ipView.setPadding(0, dp(4), 0, 0);
-        addrCard.addView(ipView, lpRow(0));
+
+        // SPEC-024：扫码直接打开网页遥控，省去在手机上输入地址
+        qrTip = new TextView(this);
+        qrTip.setText(R.string.ui_qr_tip);
+        qrTip.setTextSize(13);
+        qrTip.setTextColor(SUB);
+        qrTip.setPadding(0, dp(16), 0, 0);
+
+        LinearLayout addrRow = new LinearLayout(this);
+        addrRow.setOrientation(LinearLayout.HORIZONTAL);
+        addrRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout addrText = new LinearLayout(this);
+        addrText.setOrientation(LinearLayout.VERTICAL);
+        addrText.addView(ipView, lpRow(0));
+        addrText.addView(qrTip, lpRow(0));
+        addrRow.addView(addrText, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        qrView = new ImageView(this);
+        qrView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        qlp.leftMargin = dp(28);
+        addrRow.addView(qrView, qlp);
+        addrCard.addView(addrRow, lpRow(0));
         addCard(root, addrCard, dp(20));
 
         // 版本更新卡（SPEC-017）：状态文字 + 检查更新/下载安装按钮，均可遥控聚焦
@@ -290,14 +323,63 @@ public class MainActivity extends Activity {
     }
 
     private void tick() {
-        codeView.setText(ServerService.getPairCode(this));
-        ipView.setText(getString(R.string.ui_local_addr, localIp(),
-                ServerService.PORT, ServerService.DISCOVERY_PORT));
+        String code = ServerService.getPairCode(this);
+        codeView.setText(code);
+        String ip = localIp();
+        ipView.setText(getString(R.string.ui_local_addr, ip,
+                ServerService.PORT, ServerService.DISCOVERY_PORT,
+                ServerService.WEB_HTTP_PORT, ServerService.WEB_HTTPS_PORT));
+        updateQr(ip, code);
         statusView.setText(getString(R.string.ui_running));
         boolean a11y = TvRemoteAccessibilityService.isReady();
         a11yView.setText(getString(a11y ? R.string.ui_a11y_ok : R.string.ui_a11y_missing));
         a11yView.setTextColor(a11y ? GREEN : RED);
         h.postDelayed(this::tick, 3000);
+    }
+
+    /**
+     * SPEC-024：按当前 IP 与配对码决定二维码显示；两者都未变化时不重建位图
+     * （tick 每 3 秒一次）。二维码带 #pair=<配对码>，扫码后网页自动配对。
+     */
+    private void updateQr(String ip, String code) {
+        if (ip.equals(getString(R.string.ui_no_network))) {
+            qrView.setVisibility(View.GONE);
+            qrTip.setVisibility(View.GONE);
+            qrKey = null;
+            return;
+        }
+        qrView.setVisibility(View.VISIBLE);
+        qrTip.setVisibility(View.VISIBLE);
+        String key = ip + "\n" + code;
+        if (key.equals(qrKey)) return;
+        qrKey = key;
+        qrView.setImageBitmap(qrBitmap("http://" + ip + ":" + ServerService.WEB_HTTP_PORT
+                + "/#pair=" + code));
+    }
+
+    /** 生成白底黑块二维码位图：四周 4 模块静区，按整数倍缩放保证边缘清晰 */
+    private Bitmap qrBitmap(String text) {
+        boolean[][] mod = QrEncoder.encode(text);
+        int quiet = 4;
+        int n = mod.length + quiet * 2;
+        // 上限 240dp，同时不超过屏幕高度的五分之二：720x480 等低分辨率下也能完整显示
+        int target = Math.min(dp(240),
+                getResources().getDisplayMetrics().heightPixels * 2 / 5);
+        int scale = Math.max(1, target / n);
+        Bitmap bmp = Bitmap.createBitmap(n * scale, n * scale, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        c.drawColor(0xFFFFFFFF);
+        Paint p = new Paint();
+        p.setColor(0xFF000000);
+        for (int y = 0; y < mod.length; y++) {
+            for (int x = 0; x < mod.length; x++) {
+                if (!mod[y][x]) continue;
+                int left = (x + quiet) * scale;
+                int top = (y + quiet) * scale;
+                c.drawRect(left, top, left + scale, top + scale, p);
+            }
+        }
+        return bmp;
     }
 
     /** SPEC-014：跳到系统无障碍设置，用户在那里开启本应用的服务 */

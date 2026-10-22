@@ -69,6 +69,7 @@ pairing and connection mode.
 | Text input | Type on the phone and write into the box's focused field |
 | App shortcuts | Dynamically lists every launchable third-party app with its real box icon; Settings is always first |
 | Air mouse | BT HID mode: tilt the phone to move the box cursor, OK acts as left click |
+| Touchpad | Direct mode: switch the D-pad card to a touchpad, drag to move the cursor, with tap, long-press and two-finger scroll |
 | OK long-press | BT mode keeps sending key-down and lets the TV app decide; direct mode sends a long-press command on release after 500 ms |
 | Multi-device | LAN scan, manual add, switch and delete; pairing and connection mode remembered per device |
 | No root | Box side uses the accessibility service, `AudioManager` and `PackageManager` |
@@ -125,6 +126,28 @@ pinned first and always shown.
 > In direct mode, keys and text are injected through the box accessibility service; app launch and
 > volume do not need accessibility. In Bluetooth mode the phone app must stay in the foreground
 > (Android unregisters HID apps in the background; returning to the foreground re-registers it).
+
+## Cross-platform capability matrix
+
+The box also ships a built-in web remote: open `http://<box-ip>:17880` in any browser on the same
+LAN, with nothing to install. The box screen shows a QR code for that address with the pairing code embedded, so a phone
+camera opens it and pairs automatically — no address or code to type. After trusting the self-signed certificate,
+`https://<box-ip>:17843` adds install-to-home-screen and an offline shell.
+
+The web remote also manages multiple boxes: paired boxes are remembered in browser storage and can be
+switched from the device bar at the top. On an HTTPS page, "Scan to add" reads another box's QR code;
+manual address and pair code entry is also available. Any entry can be renamed or deleted. The page
+offers a D-pad / touchpad switch and no longer provides an air mouse.
+(Camera scanning needs a secure context; HTTP pages only offer manual add.)
+
+| Client | LAN direct | Bluetooth HID | Cursor control |
+|---|---|---|---|
+| Android native app | Yes (TCP 8899) | Yes (API 28+) | BT gyroscope air mouse / direct touchpad |
+| Browser (Android / iOS / HarmonyOS NEXT / PC) | Yes (17880 / 17843) | Not provided | Direct touchpad |
+| Native iOS / HarmonyOS NEXT app | Not provided; use the browser | Not provided | Not provided |
+
+> Browsers have no HID device API, and Web Bluetooth is GATT-client only, so the web page
+> deliberately has no Bluetooth entry. Without Bluetooth, use the Android app's BT mode or a 2.4G remote.
 
 ## How it works
 
@@ -230,6 +253,7 @@ Network requirements:
 | D-pad / OK | Uses system DPAD global actions; falls back to focus traversal on firmware that returns false |
 | OK short / long press | In BT mode the box keeps receiving "key down" while held, so TV apps judge long-press themselves; in direct mode a hold of 500 ms or more sends a long-press command on release |
 | Air mouse (↖, top-right) | BT mode only: tilt the phone to move the box cursor, OK acts as left click; tap again to disable |
+| Touchpad (segment above the D-pad) | Direct mode only: drag to move the cursor, tap to click, hold 500 ms to long-press, two-finger swipe to scroll |
 | Back / Home | System global Back / Home |
 | Menu | Opens recent tasks (no global Menu action without root) |
 | Power | Locks the box screen (not a real power off) |
@@ -247,11 +271,16 @@ Box TCP 8899, one command per line terminated by `\n`.
 | `PING` | `PONG` | Liveness check, no auth |
 | `PAIR <6-digit code>` | `OK <token>` / `ERR badcode` | Exchange the pair code for a long-lived token |
 | `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Inject a key |
-| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only) via `ACTION_LONG_CLICK` on the focused node |
+| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only): `ACTION_LONG_CLICK` when the focused node supports it, otherwise a synthetic 600 ms gesture at the focus center |
 | `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
 | `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
 | `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
 | `ICON <token> <package>` | `OK <base64(PNG)>` / `ERR arg` | App icon (144x144 PNG); accessibility not required; unknown package returns `ERR arg` |
+| `MOVE <token> <dx> <dy>` | `OK` / `ERR arg` / `ERR a11y` | Move the box cursor relatively; each axis -127..127 |
+| `MCLICK <token> <0\|1>` | `OK` / `ERR arg` / `ERR a11y` | Cursor press / release (0 releases, 1 presses) |
+| `MTAP <token>` | `OK` / `ERR a11y` | Tap at the cursor (node first, gesture fallback) |
+| `MLONG <token>` | `OK` / `ERR a11y` | Long-press at the cursor |
+| `SCROLL <token> <steps>` | `OK` / `ERR arg` / `ERR a11y` | Two-finger scroll; positive scrolls down, range -5..5 |
 
 UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds for auto-discovery.
 
@@ -261,7 +290,8 @@ UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds fo
 powershell -File tests\protocol\run.ps1
 ```
 
-Pure-Java protocol regression, 64 cases; expected output `通过 64，失败 0` (64 passed, 0 failed).
+Automated regression: 196 cases (125 protocol + 55 web API + 16 QR); expected output
+`通过 196，失败 0` (196 passed, 0 failed).
 Port 8898 must be free. If a real box is broadcasting on the LAN, the `discover_no_broadcast_null`
 case can fail due to that real broadcast; this is environment noise.
 
@@ -329,6 +359,8 @@ aapt2 → javac → d8 → dex packaging → zipalign → apksigner.
 | Bluetooth keys do nothing | Keep the app in the foreground, tap "BT" again, confirm "Bluetooth connected" |
 | Air mouse moves no cursor | The box cached the HID descriptor from its first pairing: remove the pairing with the phone in the box Bluetooth settings and pair again; on some firmware (H96) also restart box Bluetooth or edit `HidDescriptor` in `bt_config.conf` with root |
 | Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
+| Web remote does not open | Confirm the same WiFi and use the address shown on the box (`http://<ip>:17880`); for `https://<ip>:17843` first trust the self-signed certificate in the browser |
+| An "Update" badge appears in the header | The app checks the latest GitHub Release on every launch; tap the badge to read the release notes. Ignoring it is fine |
 
 ## Scope and limitations
 
@@ -336,8 +368,9 @@ Out of scope:
 
 - Controlling the TV's own power/volume (IR / HDMI-CEC): the Power key locks the box, and volume
   changes the box media volume.
-- WAN or cross-subnet control. The protocol is plaintext and meant for a trusted LAN only.
-- iOS clients.
+- WAN or cross-subnet control. The protocol is plaintext and meant for a trusted LAN only;
+  never expose 8899 / 17880 / 17843 to the internet.
+- Native iOS / HarmonyOS NEXT clients (not developed separately; use the built-in web remote).
 
 Known limitations:
 
@@ -349,9 +382,17 @@ Known limitations:
 - Bluetooth HID does not support text input or app shortcuts and needs the app in the foreground.
 - OK long-press is judged by the box app in BT mode; in direct mode it depends on the focused
   node supporting `ACTION_LONG_CLICK`, so apps without long-click support show no effect.
-- Air mouse works only in BT HID mode: direct mode cannot move the system cursor, and the box
-  must accept Bluetooth mouse HID reports. Phones without a gyroscope cannot enable it;
-  sensitivity is a fixed constant (portrait and landscape both work).
+- Air mouse is available only in the Android app's BT HID mode: the box must accept Bluetooth
+  mouse HID reports. Phones without a gyroscope cannot enable it; sensitivity is a fixed constant.
+- The web touchpad drives an app-layer cursor over the direct protocol, requires the box
+  accessibility service, and only affects apps that respond to touch.
+- The web remote needs the box service online. Browsers never receive the UDP broadcast, so a box
+  must be added by scanning its QR code or typing its address. Camera scanning works only on
+  HTTPS pages (secure context). If the self-signed certificate is not trusted, Chrome offers no
+  install entry and may disable the Service Worker; iOS Safari can still "Add to Home Screen"
+  but without offline caching.
+- Controlling box B from the page served by box A is a cross-origin request, which the box web
+  service allows; therefore never expose 17880 / 17843 to an untrusted network.
 - The box persists the HID report descriptor from its **first** pairing (on H96 it lives in
   `HidDescriptor` inside `/data/misc/bluedroid/bt_config.conf`; Fold3 re-reads it on reconnect).
   After upgrading, boxes paired with an older version must remove the pairing and pair again,
@@ -368,9 +409,24 @@ Known limitations:
   installer dialog must be confirmed with the physical remote.
 - The box "Check for updates" button handles both remote OK/ENTER and touch, because some firmware
   does not fire the default click for a focusable TextView.
+- The startup update check runs once per app launch (no background polling). If `api.github.com`
+  is unreachable it fails silently; use "Check for updates" on the About card to retry.
 
 ## Versions
 
+- **v1.6.0**: the web remote manages multiple boxes (remember paired boxes, switch, scan or add
+  manually, rename, delete); the web page gains a D-pad / touchpad switch and drops the air mouse;
+  both clients now stretch the touchpad to the full card width, matching the button rows; the web
+  volume row matches Android (`[− Volume +]` pill plus a mute key aligned with power); the power
+  button text is now red; the box address card now shows a QR code (scanning carries the pairing
+  code); the phone checks for updates on every launch and shows an "Update" badge in the header
+  that opens the release notes; direct-mode long-press OK is fixed (the service now searches
+  long-clickable child nodes when focus sits on a wrapper view, and long/short press stay
+  distinct); switching from the touchpad back to the D-pad hides the box cursor immediately
+  via the new `MHIDE` command; short-press OK now works on TV launchers such as Dangbei
+  Desktop (`performGlobalAction` reports success without clicking; the service now clicks the
+  focused node or falls back to a synthetic gesture) and taps land on the focused item instead
+  of a wrapper's center.
 - **v1.5.1**: app shortcuts now show the box's real app icons (new `ICON` command, lazy-loaded
   144x144 PNG per package; the first-character placeholder stays if loading fails).
 - **v1.5.0**: OK now distinguishes short and long press (BT sends key down/up; direct mode adds a

@@ -11,11 +11,22 @@ New-Item -ItemType Directory -Force $build | Out-Null
 $sources = @(
     "MockBoxServer.java",
     "ProtocolTest.java",
-    "..\..\app\src\com\koco\tvremote\LanClient.java"
+    "WebApiTest.java",
+    "QrCodeTest.java",
+    "..\..\app\src\com\koco\tvremote\LanClient.java",
+    "..\..\app\src\com\koco\tvremote\TouchSession.java",
+    "..\..\server\src\com\koco\tvremoteserver\WebServer.java",
+    "..\..\server\src\com\koco\tvremoteserver\QrEncoder.java"
 )
 
 javac -encoding UTF-8 -d $build @sources
 if ($LASTEXITCODE -ne 0) { Write-Host "编译失败"; exit 1 }
 
 java "-Dfile.encoding=UTF-8" -cp $build ProtocolTest
-exit $LASTEXITCODE
+$protocolExit = $LASTEXITCODE
+java "-Dfile.encoding=UTF-8" -cp $build WebApiTest
+$webExit = $LASTEXITCODE
+java "-Dfile.encoding=UTF-8" -cp $build QrCodeTest
+$qrExit = $LASTEXITCODE
+if ($protocolExit -ne 0 -or $webExit -ne 0 -or $qrExit -ne 0) { exit 1 }
+exit 0

@@ -90,6 +90,42 @@ public class LanClient {
         if (!r.startsWith("OK")) throw new Exception(r);
     }
 
+    /** SPEC-021/023：光标相对移动，单轴 -127..127 */
+    public void move(int dx, int dy) throws Exception {
+        String r = cmd("MOVE " + token + " " + dx + " " + dy, 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-023：光标处单击（盒端节点优先、手势兜底） */
+    public void tap() throws Exception {
+        String r = cmd("MTAP " + token, 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-023：光标处长按（盒端节点优先、手势兜底） */
+    public void longTap() throws Exception {
+        String r = cmd("MLONG " + token, 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-023：拖动按下 */
+    public void mouseDown() throws Exception {
+        String r = cmd("MCLICK " + token + " 1", 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-023：拖动抬起 */
+    public void mouseUp() throws Exception {
+        String r = cmd("MCLICK " + token + " 0", 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
+    /** SPEC-023：滚动格数，正数向下/向前，范围 -5..5 */
+    public void scroll(int steps) throws Exception {
+        String r = cmd("SCROLL " + token + " " + steps, 4000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
     public void text(String t) throws Exception {
         String b64 = Base64.getEncoder().encodeToString(t.getBytes("UTF-8"));
         String r = cmd("TEXT " + token + " " + b64, 5000);
@@ -160,17 +196,22 @@ public class LanClient {
                     continue;
                 }
                 String msg = new String(p.getData(), 0, p.getLength(), "UTF-8");
-                if (!msg.startsWith("TVREMOTE|")) continue;
-                String ip = p.getAddress().getHostAddress();
-                if (!seen.add(ip)) continue;
-                String[] parts = msg.split("\\|", 3);
-                String name = parts.length > 2 && !parts[2].isEmpty() ? parts[2] : ip;
-                out.add(new String[]{name, ip});
+                collectDiscovery(msg, p.getAddress().getHostAddress(), out, seen);
             }
         } catch (Exception ignored) {
         } finally {
             if (ds != null) ds.close();
         }
         return out;
+    }
+
+    /** SPEC-007：把一条广播并入结果列表；按 IP 去重，非法前缀忽略。
+     *  独立成方法便于自动测试直接校验去重语义（无需伪造多个源 IP）。 */
+    public static void collectDiscovery(String msg, String ip, List<String[]> out, Set<String> seen) {
+        if (!msg.startsWith("TVREMOTE|")) return;
+        if (!seen.add(ip)) return;
+        String[] parts = msg.split("\\|", 3);
+        String name = parts.length > 2 && !parts[2].isEmpty() ? parts[2] : ip;
+        out.add(new String[]{name, ip});
     }
 }

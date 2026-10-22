@@ -22,6 +22,8 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.InputType;
@@ -72,6 +74,10 @@ public class MainActivity extends Activity {
     private final Map<String, Bitmap> iconCache = new HashMap<>();
     private TextView status;
     private TextView devName;
+    /** SPEC-027：启动探测到新版本时顶栏的「有更新」标签 */
+    private TextView updateBadge;
+    /** SPEC-027：启动探测缓存的 Release，点标签时直接复用，避免二次请求 */
+    private Updater.Release pendingUpdate;
     private SharedPreferences sp;
     private BtHid bt;
     private BtHid.StateListener btListener;
@@ -90,6 +96,15 @@ public class MainActivity extends Activity {
     /** 飞鼠键右缩进：使右边缘与系统键行第 4 列（电源键）右边缘对齐 */
     private int mouseInset;
     private long okDownAt = 0;
+    /** 直连长按是否已在按住期间发出，避免抬手再发短按 */
+    private boolean okLongFired = false;
+    /** 按下达到长按阈值立即发 KEYLONG（真机手指轻微移动时父容器会拦截，不能只等 ACTION_UP） */
+    private final Runnable okLongTask = () -> {
+        if (!okLongFired) {
+            okLongFired = true;
+            lanPressLong(23);
+        }
+    };
     /** 与 Android 系统长按阈值一致 */
     private static final long LONG_PRESS_MS = 500;
     /** 陀螺仪死区（rad/s），抑制手抖 */
@@ -101,6 +116,17 @@ public class MainActivity extends Activity {
     // SPEC-012：应用卡动态挂载/重建用
     private LinearLayout column;
     private View appsCard;
+
+    // SPEC-023：输入方式（方向盘 / 触控板）
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private boolean inputTouchpad = false;
+    /** 方向盘与触控板共用的正方形边长（像素） */
+    private int inputD;
+    private View dpadDisc;
+    private TouchPadView touchpadView;
+    private TextView inputDpad, inputTouchpadBtn;
+    /** 触控板专用直连长连接；蓝牙模式为 null */
+    private TouchSession touchSession;
 
     /** SPEC-011：直连配对按设备 IP 持久化，控制目标恒为当前设备 */
     private String tokenOf(String host) { return sp.getString("lan_" + host, ""); }
@@ -168,6 +194,10 @@ public class MainActivity extends Activity {
         updateModeUi();
         // SPEC-015：恢复当前设备上次成功使用的连接方式（新设备默认直连）
         applyDeviceMode();
+        // SPEC-023：恢复输入方式（方向盘 / 触控板）
+        setInputMode("touchpad".equals(sp.getString("input", "dpad")));
+        // SPEC-027：每次启动后台静默探测更新，有新版本时点亮顶栏标签
+        autoCheckUpdate();
     }
 
     /** 回到前台时恢复被系统注销的蓝牙 HID 注册（SPEC-005 FR-5-7） */
@@ -177,6 +207,15 @@ public class MainActivity extends Activity {
         if (btMode && bt != null && btListener != null && !bt.isReady()) {
             bt.start(btListener);
         }
+        // 直连会话在 onPause 已关闭，回前台重新建立
+        if (inputTouchpad && lanMode && touchSession == null) startTouchpad();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // SPEC-023：离开界面立即释放按压并关闭直连会话，避免光标/触摸卡住
+        stopTouchpad();
     }
 
     private String curHost() { return devices.get(cur)[1]; }
@@ -247,6 +286,10 @@ public class MainActivity extends Activity {
         keyH = compact ? 44 : tablet ? 52 : 48;         // 输入行/音量胶囊高
         appIcon = compact ? 48 : tablet ? 64 : 56;      // 应用圆形图标位直径
         appText = compact ? 11 : tablet ? 13 : 12;      // 应用名字号
+        // SPEC-023：方向盘与触控板共用同一边长，取可用宽度与设计值中的较小者
+        int avail = getResources().getDisplayMetrics().widthPixels - dp(outer * 2) - dp(28);
+        if (tablet) avail = Math.min(avail, dp(520) - dp(28));
+        inputD = Math.min(dp(padD), avail);
     }
 
     private View buildUi() {
@@ -357,6 +400,25 @@ public class MainActivity extends Activity {
         head.addView(info);
         info.setOnClickListener(v -> showDevicePicker());
 
+        // SPEC-027：「有更新」标签，仅启动探测到更高版本时显示，点击直接看更新说明
+        updateBadge = new TextView(this);
+        updateBadge.setText(R.string.update_badge);
+        updateBadge.setTextColor(Color.WHITE);
+        updateBadge.setTextSize(11);
+        updateBadge.setGravity(Gravity.CENTER);
+        updateBadge.setPadding(dp(9), dp(4), dp(9), dp(4));
+        updateBadge.setBackground(round(ACCENT, 999, 0));
+        updateBadge.setVisibility(View.GONE);
+        updateBadge.setOnClickListener(v -> {
+            if (pendingUpdate != null) {
+                showUpdateSheet(pendingUpdate, Updater.currentVersion(this));
+            }
+        });
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.leftMargin = dp(10);
+        head.addView(updateBadge, blp);
+
         // 语言切换入口（SPEC-009 FR-9-3）：固定「中/EN」不随语言变化，一眼可辨
         TextView langBtn = new TextView(this);
         langBtn.setText("中/EN");
@@ -431,15 +493,193 @@ public class MainActivity extends Activity {
 
     // ---------------- 遥控器主卡（SPEC-012 v2：大圆盘十字 + 圆形图标键 + 音量胶囊） ----------------
 
-    /** 遥控器主卡内容：大圆盘十字导航 + 四个圆形图标键 + [− 音量 +] 胶囊与静音圆键 */
+    /** 遥控器主卡内容：方向盘/触控板二选一 + 四个圆形图标键 + [− 音量 +] 胶囊与静音圆键 */
     private View buildRemote() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
-        box.addView(buildDpadDisc());
+        box.addView(buildInputToggle(), lp(-1, -2, 0, 0, 0, dp(10)));
+
+        FrameLayout host = new FrameLayout(this);
+        dpadDisc = buildDpadDisc();
+        // 方向盘保持原直径居中；触控板铺满卡片内容宽度，与系统键行等宽
+        host.addView(dpadDisc, new FrameLayout.LayoutParams(inputD, inputD, Gravity.CENTER));
+        touchpadView = buildTouchpad();
+        host.addView(touchpadView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        box.addView(host, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, inputD));
+
         box.addView(buildSysRow(), lp(-1, -2, 0, dp(14), 0, 0));
         box.addView(buildVolRow(), lp(-1, -2, 0, dp(12), 0, 0));
         return box;
+    }
+
+    /** SPEC-023：方向盘 / 触控板分段切换（与大圆盘同宽区域内居中） */
+    private View buildInputToggle() {
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        seg.setBackground(round(DIM, 999, 0));
+        seg.setPadding(dp(3), dp(3), dp(3), dp(3));
+
+        inputDpad = segBtn(getString(R.string.input_dpad));
+        inputDpad.setOnClickListener(v -> setInputMode(false));
+        inputTouchpadBtn = segBtn(getString(R.string.input_touchpad));
+        inputTouchpadBtn.setOnClickListener(v -> setInputMode(true));
+
+        LinearLayout.LayoutParams p1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        p1.rightMargin = dp(3);
+        seg.addView(inputDpad, p1);
+        seg.addView(inputTouchpadBtn, new LinearLayout.LayoutParams(0, dp(34), 1f));
+
+        LinearLayout wrap = row();
+        wrap.setGravity(Gravity.CENTER_HORIZONTAL);
+        wrap.addView(seg, new LinearLayout.LayoutParams(
+                compact ? dp(160) : tablet ? dp(240) : dp(200), dp(40)));
+        return wrap;
+    }
+
+    private TouchPadView buildTouchpad() {
+        TouchPadView v = new TouchPadView(this, inputSink, 500, 100);
+        v.setHintLines(getString(R.string.touchpad_hint_top),
+                getString(R.string.touchpad_hint_bottom));
+        v.setVisibility(View.GONE);
+        return v;
+    }
+
+    /** 触控板手势出口：按当前连接方式分发，点击时再取模式，避免构建期绑定 */
+    private final TouchPadView.Sink inputSink = new TouchPadView.Sink() {
+        @Override
+        public void move(int dx, int dy) {
+            if (btMode) {
+                if (bt != null) bt.sendMouseMove(dx, dy, 127);
+            } else if (touchSession != null) {
+                touchSession.move(dx, dy);
+            }
+        }
+
+        @Override
+        public void tap() {
+            if (btMode) {
+                tapBt();
+            } else if (touchSession != null) {
+                touchSession.tap();
+            } else {
+                touchpadNoChannel();
+            }
+        }
+
+        @Override
+        public void longTap() {
+            if (btMode) {
+                tapBt();
+            } else if (touchSession != null) {
+                touchSession.longTap();
+            } else {
+                touchpadNoChannel();
+            }
+        }
+
+        @Override
+        public void press() {
+            if (btMode) {
+                if (bt != null) bt.sendMouseButton(BtHid.MOUSE_LEFT);
+            } else if (touchSession != null) {
+                touchSession.press();
+            }
+        }
+
+        @Override
+        public void release() {
+            if (btMode) {
+                if (bt != null) bt.sendMouseButton(0);
+            } else if (touchSession != null) {
+                touchSession.release();
+            }
+        }
+
+        @Override
+        public void scroll(int steps) {
+            if (btMode) {
+                if (bt != null) bt.sendMouseScroll(steps);
+            } else if (touchSession != null) {
+                touchSession.scroll(steps);
+            }
+        }
+
+        @Override
+        public boolean armLongPress() {
+            // 蓝牙：到点立即按下左键，盒子端从按下时刻自行计长按；直连只进入待定
+            if (!btMode || bt == null || !bt.isReady()) return false;
+            return bt.sendMouseButton(BtHid.MOUSE_LEFT);
+        }
+    };
+
+    /** 蓝牙单击：按下后 50ms 抬起 */
+    private void tapBt() {
+        if (bt == null || !bt.isReady()) {
+            setStatus(getString(R.string.bt_not_ready), false);
+            return;
+        }
+        bt.sendMouseButton(BtHid.MOUSE_LEFT);
+        ui.postDelayed(() -> {
+            if (btMode && bt != null) bt.sendMouseButton(0);
+        }, 50);
+    }
+
+    private void touchpadNoChannel() {
+        if (btMode) setStatus(getString(R.string.touchpad_need_bt), false);
+        else if (lanMode) setStatus(getString(R.string.touchpad_need_lan), false);
+        else setStatus(getString(R.string.select_mode_first), false);
+    }
+
+    /** 切换输入方式：触控板互斥飞鼠，方向盘保留原按键布局 */
+    private void setInputMode(boolean touchpad) {
+        inputTouchpad = touchpad;
+        sp.edit().putString("input", touchpad ? "touchpad" : "dpad").apply();
+        if (touchpad) stopAirMouse(); // FR-23-5：进触控板先关飞鼠
+        if (touchpadView != null) touchpadView.setVisibility(touchpad ? View.VISIBLE : View.GONE);
+        if (dpadDisc != null) dpadDisc.setVisibility(touchpad ? View.GONE : View.VISIBLE);
+        updateInputToggle();
+        if (touchpad) startTouchpad();
+        else stopTouchpad();
+    }
+
+    private void updateInputToggle() {
+        if (inputDpad == null) return;
+        applySeg(inputDpad, !inputTouchpad);
+        applySeg(inputTouchpadBtn, inputTouchpad);
+    }
+
+    /** 进入触控板：蓝牙无需会话，直连建立专用长连接并点亮光标 */
+    private void startTouchpad() {
+        stopTouchpad();
+        if (touchpadView != null) {
+            touchpadView.setTiming(btMode ? 350 : 500, btMode ? 40 : 100);
+        }
+        if (btMode) {
+            if (bt == null || !bt.isReady() || bt.connectedDevice() == null) {
+                setStatus(getString(R.string.touchpad_need_bt), false);
+            }
+            return;
+        }
+        if (lanMode && lan != null && !tokenOf(curHost()).isEmpty()) {
+            touchSession = new TouchSession(curHost(), LanClient.DEFAULT_PORT, tokenOf(curHost()),
+                    msg -> setStatus(Errors.friendly(this, new Exception(msg)), false));
+            touchSession.showCursor();
+            return;
+        }
+        setStatus(getString(R.string.touchpad_need_lan), false);
+    }
+
+    /** 退出触控板：先释放按压（reset 内发 release），再隐藏光标并关闭会话 */
+    private void stopTouchpad() {
+        if (touchpadView != null) touchpadView.reset();
+        if (touchSession != null) {
+            touchSession.hide();
+            touchSession.close();
+            touchSession = null;
+        }
     }
 
     /** 大圆盘：整圆盘面 + 四向小圆键嵌盘缘 + 中心 OK 光环圈（参考图综合）。
@@ -447,9 +687,7 @@ public class MainActivity extends Activity {
      *  保证四键在环状背景的上下左右绝对对称。 */
     private View buildDpadDisc() {
         FrameLayout pad = new FrameLayout(this);
-        int avail = getResources().getDisplayMetrics().widthPixels - dp(outer * 2) - dp(28);
-        if (tablet) avail = Math.min(avail, dp(520) - dp(28));
-        final int d = Math.min(dp(padD), avail);
+        final int d = inputD;
         pad.setLayoutParams(new LinearLayout.LayoutParams(d, d));
 
         GradientDrawable disc = new GradientDrawable();
@@ -475,21 +713,31 @@ public class MainActivity extends Activity {
         ok.setGravity(Gravity.CENTER);
         ok.setBackground(okRing());
         // SPEC-018：OK 区分短按/长按。蓝牙发按下/抬起（盒子自行判定长按），
-        // 直连抬手时按按住时长选 KEY 或 KEYLONG；飞鼠模式下 OK 为鼠标左键。
+        // 直连按住达到 500ms 立即发 KEYLONG、提前抬手发 KEY；飞鼠模式下 OK 为鼠标左键。
         ok.setOnTouchListener((v, e) -> {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    // 按住期间禁止外层滚动容器拦截，否则手指轻微移动会变成 ACTION_CANCEL
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
                     okDownAt = SystemClock.uptimeMillis();
+                    okLongFired = false;
                     okDown();
+                    if (lanMode && !airMouse) ui.postDelayed(okLongTask, LONG_PRESS_MS);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
                     return true;
                 case MotionEvent.ACTION_UP:
-                    okUp(SystemClock.uptimeMillis() - okDownAt);
+                    ui.removeCallbacks(okLongTask);
+                    if (!okLongFired) okUp(SystemClock.uptimeMillis() - okDownAt);
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
                     return true;
                 case MotionEvent.ACTION_CANCEL:
-                    okCancel();
+                    ui.removeCallbacks(okLongTask);
+                    if (!okLongFired) okCancel();
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
                     return true;
                 default:
-                    return false;
+                    return true;
             }
         });
         pad.addView(ok, new FrameLayout.LayoutParams(dp(okD), dp(okD), Gravity.CENTER));
@@ -613,6 +861,8 @@ public class MainActivity extends Activity {
             setStatus(getString(R.string.air_no_sensor), false);
             return;
         }
+        // SPEC-023：触控板与飞鼠互斥，开飞鼠时自动切回方向盘
+        if (inputTouchpad) setInputMode(false);
         airMouse = true;
         updateMouseBtn();
         setStatus(getString(R.string.air_on), true);
@@ -1014,8 +1264,10 @@ public class MainActivity extends Activity {
                 final boolean newer = Updater.isNewer(r.tag, cur);
                 runOnUiThread(() -> {
                     if (newer) {
+                        showUpdateBadge(r);
                         showUpdateSheet(r, cur);
                     } else {
+                        hideUpdateBadge();
                         Toast.makeText(this, getString(R.string.update_latest,
                                 Updater.displayVersion(cur)), Toast.LENGTH_SHORT).show();
                     }
@@ -1026,6 +1278,29 @@ public class MainActivity extends Activity {
                         getString(R.string.update_failed, msg), Toast.LENGTH_LONG).show());
             }
         });
+    }
+
+    /** SPEC-027：启动时后台静默探测，只有发现更高版本才点亮「有更新」标签 */
+    private void autoCheckUpdate() {
+        worker.submit(() -> {
+            try {
+                final Updater.Release r = Updater.fetchLatest(this);
+                if (!Updater.isNewer(r.tag, Updater.currentVersion(this))) return;
+                runOnUiThread(() -> showUpdateBadge(r));
+            } catch (Exception ignored) {
+                // 启动探测静默失败：不打扰遥控主流程，用户仍可在「关于」卡手动重试
+            }
+        });
+    }
+
+    private void showUpdateBadge(Updater.Release r) {
+        pendingUpdate = r;
+        updateBadge.setVisibility(View.VISIBLE);
+    }
+
+    private void hideUpdateBadge() {
+        pendingUpdate = null;
+        updateBadge.setVisibility(View.GONE);
     }
 
     private void showUpdateSheet(final Updater.Release r, String curVersion) {
@@ -1245,6 +1520,7 @@ public class MainActivity extends Activity {
 
     /** 当前设备已配对：直接启用直连模式，控制目标 = 当前设备 */
     private void enableLan() {
+        stopTouchpad(); // SPEC-023：先释放按压再切换直连目标
         if (btMode && bt != null) bt.disconnect();
         stopAirMouse(); // SPEC-018：飞鼠只在蓝牙模式可用
         lan = new LanClient(curHost(), LanClient.DEFAULT_PORT, tokenOf(curHost()));
@@ -1254,11 +1530,13 @@ public class MainActivity extends Activity {
         updateModeUi();
         setStatus(getString(R.string.lan_paired_status, curHost()), true);
         ensureApps();
+        if (inputTouchpad) startTouchpad();
     }
 
     /** SPEC-015：切换/启动设备时，按该设备上次成功使用的方式恢复连接 */
     private void applyDeviceMode() {
         String mode = modeOf(curHost());
+        stopTouchpad(); // SPEC-023：切设备前先停止触控板，避免命令发到新设备
         stopAirMouse(); // SPEC-018：切设备时退出飞鼠，避免对着旧盒子移动光标
         if (btMode && bt != null) bt.disconnect();
         lan = null;
@@ -1388,7 +1666,9 @@ public class MainActivity extends Activity {
         for (int i = 0; i < devices.size(); i++) {
             final int idx = i;
             final String[] d = devices.get(i);
-            sheet.row(d[0], d[1], i == cur, () -> switchTo(idx));
+            // SPEC-007 FR-7-4：未配对的盒子在列表中明确标注
+            String sub = tokenOf(d[1]).isEmpty() ? getString(R.string.scan_unpaired, d[1]) : d[1];
+            sheet.row(d[0], sub, i == cur, () -> switchTo(idx));
         }
         sheet.action(getString(R.string.delete_current), false, RED,
                         () -> removeCurrent())
@@ -1513,6 +1793,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     // 配对哪台就控制哪台：把该 IP 定位/新增为当前设备，直连立即可用
                     focusDevice(h);
+                    stopTouchpad(); // SPEC-023：先释放按压再切换直连目标
                     if (btMode && bt != null) bt.disconnect();
                     lan = new LanClient(h, LanClient.DEFAULT_PORT, tok);
                     lanMode = true;
@@ -1521,6 +1802,7 @@ public class MainActivity extends Activity {
                     updateModeUi();
                     setStatus(getString(R.string.paired, h), true);
                     ensureApps();
+                    if (inputTouchpad) startTouchpad();
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> setStatus(Errors.friendly(this, e), false));
@@ -1609,13 +1891,23 @@ public class MainActivity extends Activity {
 
     // ---------------- 蓝牙模式 ----------------
 
+    /** SPEC-022：不支持 HID 时给出浏览器替代路径，地址取当前设备 IP */
+    private String webAddrText() {
+        String host = curHost();
+        if (host == null || host.isEmpty()) return getString(R.string.bt_web_addr_unknown);
+        return getString(R.string.bt_web_addr, host);
+    }
+
     /** 进入蓝牙模式：注册 HID；已记住盒子则直接重连，否则弹设备选择（SPEC-005 FR-5-7/5-8） */
     private void startBt() {
+        stopTouchpad(); // SPEC-023：先释放按压再切蓝牙
+        if (touchpadView != null) touchpadView.setTiming(350, 40);
         // Android 8.x 没有 HID Device API：点击时明确告知，模式按钮仍常显
         if (Build.VERSION.SDK_INT < 28) {
             setStatus(getString(R.string.bt_not_supported), false);
             new Sheet(getString(R.string.bt_unsupported_title),
-                    getString(R.string.bt_unsupported_msg, getString(R.string.bt_not_supported)))
+                    getString(R.string.bt_unsupported_msg,
+                            getString(R.string.bt_not_supported), webAddrText()))
                     .action(getString(R.string.ok_got_it), true, SUB)
                     .show();
             return;
@@ -1628,7 +1920,7 @@ public class MainActivity extends Activity {
                     if (!ok) {
                         setStatus(getString(R.string.bt_unavailable, reason), false);
                         new Sheet(getString(R.string.bt_unsupported_title),
-                                getString(R.string.bt_unsupported_msg, reason))
+                                getString(R.string.bt_unsupported_msg, reason, webAddrText()))
                                 .action(getString(R.string.ok_got_it), true, SUB)
                                 .show();
                         return;
@@ -1670,6 +1962,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     btMode = false;
+                    stopTouchpad(); // SPEC-023：蓝牙断开时释放触控板按压
                     stopAirMouse(); // SPEC-018：蓝牙断开后退出飞鼠
                     updateModeUi();
                     // 切设备时主动断开旧目标，不覆盖新设备的直连状态文案
@@ -1788,7 +2081,9 @@ public class MainActivity extends Activity {
                     row.setBackground(ripple(DIM, 14, 0));
                     row.setPadding(dp(14), dp(12), dp(14), dp(12));
                     TextView name = new TextView(this);
-                    name.setText(h[0]);
+                    // SPEC-007 FR-7-4：未配对的盒子在发现列表中明确标注
+                    name.setText(tokenOf(h[1]).isEmpty()
+                            ? getString(R.string.scan_unpaired, h[0]) : h[0]);
                     name.setTextColor(TXT);
                     name.setTextSize(15);
                     row.addView(name);
@@ -1819,6 +2114,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopTouchpad(); // SPEC-023：退出时释放按压并关闭直连会话
         stopAirMouse(); // SPEC-018：退出界面停止陀螺仪并释放鼠标按键
         if (bt != null) bt.stop();
         worker.shutdownNow();

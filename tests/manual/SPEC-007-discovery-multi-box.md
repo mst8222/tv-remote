@@ -1,7 +1,7 @@
-# SPEC-007 直连设备发现与多盒子管理 — 手工验收清单（待实现）
+# SPEC-007 直连设备发现与多盒子管理 — 手工验收清单
 
-- 对应 spec：spec/planned/SPEC-007-discovery-multi-box.md
-- 状态：TDD 先行清单
+- 对应 spec：`spec/developing/SPEC-007-discovery-multi-box.md`
+- 状态：已实现，自动项已执行；多盒子交互待验收
 - 结果标记：P 通过 / F 失败 / N 未执行
 
 ## 用例
@@ -23,5 +23,5 @@
 实际：（待填）　结果：（P/F/N）
 
 ### TC-007-04 发现去重自动用例（AC-4）
-tests/protocol 中加入 [SPEC-007] 用例：两条不同源 IP 广播均被发现且不重复。
-实际：（待填）　结果：（P/F/N）
+`LanClient.collectDiscovery` 对两条不同源 IP 的广播都入列、同一 IP 重复广播只保留一条。
+实际：`discover_multi_count` / `discover_multi_names` 通过　结果：P

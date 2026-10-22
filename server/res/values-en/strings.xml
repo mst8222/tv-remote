@@ -9,8 +9,9 @@
     <string name="ui_grp_status">Service</string>
     <string name="ui_grp_pair">Pair code</string>
     <string name="ui_grp_addr">Address</string>
-    <string name="ui_local_addr">Local address: %1$s  Port: %2$d\nDiscovery port: %3$d</string>
+    <string name="ui_local_addr">Local address: %1$s  Port: %2$d\nDiscovery port: %3$d\nWeb remote: http://%1$s:%4$d  https://%1$s:%5$d</string>
     <string name="ui_no_network">No network</string>
+    <string name="ui_qr_tip">Scan to open the web remote (phone and box on the same Wi-Fi)</string>
     <string name="ui_a11y_ok">Accessibility service: enabled (keys ready)</string>
     <string name="ui_a11y_missing">Accessibility service: off (tap to enable, required for remote control)</string>
     <string name="ui_tip">First run: enable "TV Remote Service" in system Settings → Accessibility. No root required.\nThen choose "Direct" or "BT" in the phone app and enter the 6-digit pairing code above.\nThe service starts automatically on every boot (including after power loss).</string>

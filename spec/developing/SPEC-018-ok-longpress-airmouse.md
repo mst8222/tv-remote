@@ -4,7 +4,7 @@
 
 - 状态：developing
 - 创建：2026-10-21
-- 更新：2026-10-21（开工：spec 与手工清单已建立，移入 developing）
+- 更新：2026-10-22（当贝桌面 OK 点击与长按落点修复，见变更记录）
 - 优先级：high
 
 ## 变更记录
@@ -21,6 +21,25 @@
   删配对重配的处理方式与版本升级说明。
 - 2026-10-21 待手工项仍为 AC-1 / AC-2 / AC-3 的长按界面效果、AC-5（无陀螺仪机型）、
   AC-7 的切换场景，spec 保持在 developing。
+- 2026-10-22 直连长按失效修复：焦点落在外层 FrameLayout 时沿父链找不到可长按节点，
+  新增按焦点中心向下搜索子节点；荐片TV RK3566 + Note20 实测长按弹出应用菜单，
+  短按仍正常打开应用，两者区分正确。
+- 2026-10-22 当贝桌面复测失败后的二次修复（用户反馈「手机侧长按 OK 无效」）：
+  - 实测手机 → 盒子链路正常（手机音量键可使盒子音量浮层变化），问题在盒端 OK 注入：
+    当贝桌面下 `performGlobalAction(DPAD_CENTER)` 返回 true 但不产生点击，
+    `ENTRY` 物理键注入（adb `input keyevent 66`）才能打开应用。
+  - 另一个坑：焦点常落在整行/整个列表容器上，容器中心可能落在卡片间隙，
+    按容器中心点按会点空；改为向下取真正 focused 的最小子节点作为落点。
+  - 新逻辑：KEY 23 先在焦点子树内找可点击最小节点执行 `ACTION_CLICK`，
+    找不到则按焦点中心合成点按手势；KEYLONG 同样先找可长按节点，
+    再合成 600ms 长按手势；手势不可用时回退 `GLOBAL_ACTION_DPAD_CENTER`。
+  - 真机验证：手机短按 OK 打开盒子应用；手机长按 OK 时盒端收到 KEYLONG 并在
+    焦点应用图标上合成手势（临时 Toast 确认坐标 256,383 / 1024,1435）。
+    当贝桌面的图标本身没有长按行为（物理遥控长按 ENTER 同样无菜单），
+    因此该桌面上长按无视觉变化属桌面限制，不是链路失效。
+- 2026-10-22 补充实测（回答「能否用合成触摸长按」）：当贝图标无触摸长按回调，
+  真实触摸长按（`input motionevent` 同坐标按住 1.6s）不弹菜单，同坐标 tap 可打开应用。
+  叠加 H96 不执行合成手势，直连在该桌面无法通过任何手势路径触发长按菜单。
 
 ## 背景与目标
 
@@ -45,8 +64,10 @@
   - 仅接受 keycode 23，其余返回 `ERR cmd`；
   - 缺参/非数字返回 `ERR arg`；token 错误返回 `ERR auth`（沿用现有认证顺序）；
   - 无障碍未开启返回 `ERR a11y`；
-  - 盒端对当前焦点节点执行 `ACTION_LONG_CLICK`（沿父链找到可长按节点），
-    成功 `OK`；无焦点/节点不可长按视为无操作返回 `OK`；动作被拒 `ERR exec`。
+  - 盒端从当前焦点向下取真正 focused 的最小子节点作为操作目标；
+    先在目标子树内找可长按的最小节点执行 `ACTION_LONG_CLICK`，
+    找不到则按目标中心合成 600ms 长按手势（部分 TV 桌面只响应触摸）。
+    成功 `OK`；无焦点视为无操作返回 `OK`；动作被拒 `ERR exec`。
 - FR-18-5 遥控器卡标题行右上角增加圆形箭头键（↖）作为飞鼠开关，
   直径与系统键行的电源键相同，右边缘与电源键右边缘对齐：
   - 仅蓝牙 HID 模式可开启；直连模式点击提示「飞鼠需要蓝牙模式」；
@@ -60,6 +81,11 @@
 - FR-18-8 飞鼠模式在以下情况自动退出并停止陀螺仪监听：再次点击开关、切换到直连、
   切换设备、蓝牙断开、Activity 销毁；不持久化飞鼠开关状态。
 - FR-18-9 新增中英文文案（飞鼠开关名、需要蓝牙、无陀螺仪、已开启提示）。
+- FR-18-10 直连短按 OK（`KEY <token> 23`）采用同一套落点逻辑：
+  先执行节点 `ACTION_CLICK`，找不到则按焦点中心合成点按手势，
+  手势不可用时回退 `GLOBAL_ACTION_DPAD_CENTER`。
+  原因：实测当贝桌面 `performGlobalAction(DPAD_CENTER)` 返回 true 但不产生点击，
+  且焦点落在外层容器时容器中心可能落在条目间隙。
 
 ## 非功能需求（NFR）
 
@@ -74,20 +100,32 @@
 - [ ] AC-1 蓝牙模式下短按 OK，盒子端应用触发一次确认（H96 实测）。 【手工】
 - [ ] AC-2 蓝牙模式下按住 OK 约 1 秒再抬起，盒子端应用触发长按功能（选一个支持
       长按菜单的界面验证）。 【手工】
-- [ ] AC-3 直连模式下长按 OK，盒子端收到 `KEYLONG` 并执行 `ACTION_LONG_CLICK`
-      （Fold3/H96 上验证节点可长按的界面）。 【手工】
+- [x] AC-3 直连模式下长按 OK，盒子端收到 `KEYLONG` 并按焦点执行长按
+      （节点可长按则走 `ACTION_LONG_CLICK`，否则按焦点中心合成 600ms 手势）。
+      荐片TV RK3566 + Note20 实测菜单类界面可弹出长按菜单。 【手工】
 - [ ] AC-4 蓝牙模式开启飞鼠后，转动手机可移动盒子光标；按 OK 可点击目标。 【手工】
 - [ ] AC-5 手机无陀螺仪（模拟器）点击「鼠标」提示不支持，不进入飞鼠模式。 【手工】
 - [ ] AC-6 直连模式点击「鼠标」提示需要蓝牙模式。 【手工】
 - [ ] AC-7 关闭飞鼠、切直连、切设备、蓝牙断开、退出 App 后陀螺仪停止，
       光标不再移动，左键状态已释放。 【手工】
-- [ ] AC-8 `powershell -File tests\protocol\run.ps1` 全绿（新增 KEYLONG 用例）。 【自动】
-- [ ] AC-9 `python build.py app` / `python build.py server` 构建通过。 【自动】
+- [x] AC-8 `powershell -File tests\protocol\run.ps1` 全绿（新增 KEYLONG 用例）。 【自动】
+- [x] AC-9 `python build.py app` / `python build.py server` 构建通过。 【自动】
+- [x] AC-10 直连模式下短按 OK，当贝桌面能打开当前焦点应用；
+      长按 OK 时盒端收到 `KEYLONG`（当贝桌面图标本身无长按行为，
+      不出现菜单属桌面限制）。荐片TV RK3566 + Note20 实测通过。 【手工】
 
 ## 边界与已知限制
 
-- 直连长按依赖盒子端无障碍节点支持 `ACTION_LONG_CLICK` 且
-  `isLongClickable()` 为 true；不支持的应用会无效果或返回 `ERR exec`。
+- 直连长按依赖盒子端无障碍节点或合成手势；桌面本身不提供长按行为时
+  （实测当贝桌面的应用图标，物理遥控长按 ENTER 同样无菜单）不会产生界面变化。
+- 2026-10-22 补充实测：当贝桌面图标没有触摸长按回调。用 `input motionevent DOWN`
+  在同坐标按住 1.6s 再 UP 不出现任何菜单，而同坐标 `input tap` 能正常打开应用，
+  说明触摸注入有效、是图标本身不响应长按。因此「合成触摸长按」在该桌面同样无解，
+  直连长按只能依赖节点 `ACTION_LONG_CLICK`（节点无长按能力时即无操作）。
+- 合成手势要求固件允许手势注入；不可用时回退系统 OK 动作，
+  此时仍需应用自身响应 `GLOBAL_ACTION_DPAD_CENTER`。
+- 焦点落在大容器且内部选中项未暴露 focused 状态时，落点为容器中心，
+  可能不是当前高亮条目（当贝桌面首行卡片即如此）。
 - 飞鼠需要盒子支持蓝牙 HID 鼠标；部分 Android TV 对 COMBO 描述符兼容性有限。
 - 盒子端会把首次配对时的 HID 报告描述符持久化在绑定记录里（H96 实测存于
   `/data/misc/bluedroid/bt_config.conf` 的 `HidDescriptor`），重连不会重新读取。
@@ -103,7 +141,9 @@
 ## 实现映射
 
 - 协议：`server/src/com/koco/tvremoteserver/ServerService.java` 新增 `KEYLONG` 分支；
-  `TvRemoteAccessibilityService.keyLong()` / `longClickFocused()` 执行 `ACTION_LONG_CLICK`。
+  `TvRemoteAccessibilityService.key()`（KEY 23）/ `keyLong()` 统一走 `pressFocused()`：
+  向下取最小 focused 节点 → 节点 `ACTION_CLICK`/`ACTION_LONG_CLICK` →
+  失败则按目标中心合成手势 → 手势不可用回退 `GLOBAL_ACTION_DPAD_CENTER`。
 - 手机端直连：`app/src/com/koco/tvremote/LanClient.java` 新增 `keyLong(int)`。
 - 手机端按键：`MainActivity.buildDpadDisc()` 的 OK 改为 `OnTouchListener`，
   `okDown()/okUp()/okCancel()` 按模式分流；`LONG_PRESS_MS = 500`。

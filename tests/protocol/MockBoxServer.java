@@ -11,7 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 直连协议的盒子端参照实现（对应 spec/implemented/SPEC-001-lan-direct.md）。
@@ -71,11 +73,46 @@ public class MockBoxServer implements AutoCloseable {
     public volatile String iconBase64 =
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+    // SPEC-021：最近一次飞鼠位移与左键状态
+    public volatile int lastDx;
+    public volatile int lastDy;
+    public volatile boolean mouseDown;
+
+    // SPEC-023：触控板命令记录
+    public volatile int moveCount;
+    public volatile int tapCount;
+    public volatile int longTapCount;
+    public volatile int scrollCount;
+    public volatile int hideCount;
+    public volatile int lastScroll;
+    public volatile int connectionCount;
+
+    /** 测试辅助：清空触控板命令记录，避免用例之间互相影响 */
+    public void resetTouchRecords() {
+        moveCount = 0;
+        tapCount = 0;
+        longTapCount = 0;
+        scrollCount = 0;
+        hideCount = 0;
+        lastScroll = 0;
+        lastDx = 0;
+        lastDy = 0;
+        mouseDown = false;
+        connectionCount = 0;
+    }
+
+    // SPEC-006：同一 IP 连续配对失败 5 次锁 5 分钟
+    private static final int PAIR_MAX_FAILS = 5;
+    private static final long PAIR_LOCK_MS = 5 * 60 * 1000L;
+    private final Map<String, Integer> pairFails = new HashMap<>();
+    private final Map<String, Long> pairLockUntil = new HashMap<>();
+
     private void serve() {
         try {
             while (!server.isClosed()) {
                 Socket s = server.accept();
                 synchronized (clients) { clients.add(s); }
+                connectionCount++;
                 Thread h = new Thread(() -> handle(s), "mock-box-conn");
                 h.setDaemon(true);
                 h.start();
@@ -103,6 +140,11 @@ public class MockBoxServer implements AutoCloseable {
 
     /** 与 ServerService.dispatch 保持逐行对应 */
     public String dispatch(String line) {
+        return dispatch(line, "127.0.0.1");
+    }
+
+    /** SPEC-006：peerIp 用于配对失败锁定；TCP 与 Web 两条入口语义一致 */
+    public String dispatch(String line, String peerIp) {
         try {
             if (line.equals("PING")) return "PONG";
 
@@ -111,7 +153,13 @@ public class MockBoxServer implements AutoCloseable {
 
             if (p[0].equals("PAIR")) {
                 if (p.length < 2) return "ERR arg";
-                if (p[1].equals(pairCode)) return "OK " + token;
+                if (isPairLocked(peerIp)) return "ERR locked";
+                if (p[1].equals(pairCode)) {
+                    pairFails.remove(peerIp);
+                    pairLockUntil.remove(peerIp);
+                    return "OK " + token;
+                }
+                notePairFail(peerIp);
                 return "ERR badcode";
             }
 
@@ -140,13 +188,77 @@ public class MockBoxServer implements AutoCloseable {
                     }
                     return keyLong(code);
                 }
+                case "MOVE": {
+                    if (p.length < 3) return "ERR arg";
+                    String[] v = p[2].trim().split("\\s+");
+                    if (v.length != 2) return "ERR arg";
+                    int dx;
+                    int dy;
+                    try {
+                        dx = Integer.parseInt(v[0]);
+                        dy = Integer.parseInt(v[1]);
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    if (Math.abs(dx) > 127 || Math.abs(dy) > 127) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    lastDx = dx;
+                    lastDy = dy;
+                    moveCount++;
+                    return "OK";
+                }
+                case "MTAP": {
+                    // SPEC-023：光标处单击，节点优先、手势必兜底；无参数
+                    if (!a11yEnabled) return "ERR a11y";
+                    tapCount++;
+                    return "OK";
+                }
+                case "MLONG": {
+                    // SPEC-023：光标处长按，节点优先、手势兜底；无参数
+                    if (!a11yEnabled) return "ERR a11y";
+                    longTapCount++;
+                    return "OK";
+                }
+                case "SCROLL": {
+                    // SPEC-023：正数向下/向前，范围 -5..5
+                    if (p.length < 3) return "ERR arg";
+                    int steps;
+                    try {
+                        steps = Integer.parseInt(p[2].trim());
+                    } catch (NumberFormatException e) {
+                        return "ERR arg";
+                    }
+                    if (Math.abs(steps) > 5) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    lastScroll = steps;
+                    scrollCount++;
+                    return "OK";
+                }
+                case "MCLICK": {
+                    if (p.length < 3) return "ERR arg";
+                    String st = p[2].trim();
+                    if (!st.equals("0") && !st.equals("1")) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    mouseDown = st.equals("1");
+                    return "OK";
+                }
+                case "MHIDE": {
+                    // SPEC-023：退出触控板立即隐藏光标
+                    if (p.length > 2) return "ERR arg";
+                    if (!a11yEnabled) return "ERR a11y";
+                    hideCount++;
+                    return "OK";
+                }
                 case "TEXT": {
                     if (p.length < 3) return "ERR arg";
+                    if (p[2].length() > 2048) return "ERR toolong";
                     String txt = new String(Base64.getDecoder().decode(p[2]), StandardCharsets.UTF_8);
+                    if (txt.codePointCount(0, txt.length()) > 256) return "ERR toolong";
                     return text(txt);
                 }
                 case "APP":
                     if (p.length < 3) return "ERR arg";
+                    if (!validPkg(p[2])) return "ERR arg";
                     return launch(p[2]) ? "OK" : "ERR exec";
                 case "LIST":
                     // SPEC-016：返回可配置的「包名|base64(应用名)」载荷，与盒子端语义一致
@@ -162,6 +274,33 @@ public class MockBoxServer implements AutoCloseable {
         } catch (Exception e) {
             return "ERR " + e.getClass().getSimpleName();
         }
+    }
+
+    /** SPEC-006：包名白名单字符与长度 */
+    private static boolean validPkg(String pkg) {
+        return pkg.length() <= 128 && pkg.matches("[A-Za-z0-9._]+");
+    }
+
+    private boolean isPairLocked(String ip) {
+        Long until = pairLockUntil.get(ip);
+        if (until == null) return false;
+        if (System.currentTimeMillis() < until) return true;
+        pairLockUntil.remove(ip);
+        pairFails.remove(ip);
+        return false;
+    }
+
+    private void notePairFail(String ip) {
+        int n = pairFails.containsKey(ip) ? pairFails.get(ip) : 0;
+        n++;
+        pairFails.put(ip, n);
+        if (n >= PAIR_MAX_FAILS) pairLockUntil.put(ip, System.currentTimeMillis() + PAIR_LOCK_MS);
+    }
+
+    /** 测试辅助：清空配对失败计数，避免用例之间互相影响 */
+    public void resetPairGuard() {
+        pairFails.clear();
+        pairLockUntil.clear();
     }
 
     /**

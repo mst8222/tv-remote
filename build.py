@@ -27,6 +27,9 @@ APKSIGNER = os.path.join(BT, "apksigner.bat")
 KEYSTORE = os.path.join(HERE, "keys", "release.jks")
 KS_PASS = "koco123456"
 OUT = os.path.join(HERE, "dist", OUT_NAMES.get(MODULE, MODULE + ".apk"))
+WEB_DIR = os.path.join(APP, "assets", "web")
+WEB_CERT = os.path.join(HERE, "keys", "web.p12")
+WEB_PASS = "koco123456"
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
 
@@ -55,6 +58,31 @@ def compile_resources():
     return [flat]
 
 
+def web_assets_dir():
+    """SPEC-020：校验静态页、生成/复用自签证书，返回 aapt2 的 assets 目录"""
+    if MODULE != "server":
+        return None
+    if not os.path.isdir(WEB_DIR):
+        raise SystemExit(f"[x] 缺少静态页目录: {WEB_DIR}")
+    required = ["index.html", "app.js", "style.css", "manifest.webmanifest",
+                "sw.js", "icon-192.png", "icon-512.png"]
+    for name in required:
+        if not os.path.exists(os.path.join(WEB_DIR, name)):
+            raise SystemExit(f"[x] 缺少静态页文件: {os.path.join(WEB_DIR, name)}")
+    if not os.path.exists(WEB_CERT):
+        os.makedirs(os.path.dirname(WEB_CERT), exist_ok=True)
+        # -J-Dkeystore.pkcs12.legacy：JDK 高版本默认生成 AES/HmacPBESHA256 的 PKCS12，
+        # 盒端 BouncyCastle 无法解析（报 No installed provider supports this key）
+        run(["keytool", "-J-Dkeystore.pkcs12.legacy", "-genkeypair",
+             "-keystore", WEB_CERT, "-storetype", "PKCS12",
+             "-alias", "web", "-keyalg", "RSA", "-keysize", "2048", "-validity", "3650",
+             "-storepass", WEB_PASS, "-keypass", WEB_PASS,
+             "-dname", "CN=TV Remote Box, OU=Personal, O=Koco, C=CN"])
+        print("    已生成 Web 自签证书")
+    shutil.copy(WEB_CERT, os.path.join(WEB_DIR, "web.p12"))
+    return os.path.join(APP, "assets")
+
+
 def link_resources(extra):
     base = os.path.join(HERE, "base.apk")
     if os.path.exists(base):
@@ -62,11 +90,15 @@ def link_resources(extra):
     # --java 输出 R.java，供 javac 编译引用资源
     gendir = os.path.join(HERE, "gen", MODULE)
     os.makedirs(gendir, exist_ok=True)
-    run([AAPT2, "link", "-o", base, "-I", ANDROID_JAR,
-         "--manifest", os.path.join(APP, "AndroidManifest.xml"),
-         "--java", gendir,
-         "--min-sdk-version", "26", "--target-sdk-version", "30",
-         "--version-code", "7", "--version-name", "1.5.1"] + extra)
+    assets = web_assets_dir()
+    cmd = [AAPT2, "link", "-o", base, "-I", ANDROID_JAR,
+           "--manifest", os.path.join(APP, "AndroidManifest.xml"),
+           "--java", gendir,
+           "--min-sdk-version", "26", "--target-sdk-version", "30",
+           "--version-code", "8", "--version-name", "1.6.0"]
+    if assets:
+        cmd += ["-A", assets]
+    run(cmd + extra)
     print("[2/7] 资源与清单已链接")
     return base
 

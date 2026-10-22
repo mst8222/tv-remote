@@ -79,8 +79,8 @@ spec/
 | SPEC-003 | 手机端 UI 与设备管理 | implemented |
 | SPEC-004 | 构建体系 | implemented |
 | SPEC-005 | 蓝牙 HID 模式打通 | developing |
-| SPEC-006 | 直连协议加固 | planned |
-| SPEC-007 | 直连设备发现与多盒子管理 | planned |
+| SPEC-006 | 直连协议加固 | developing |
+| SPEC-007 | 直连设备发现与多盒子管理 | developing |
 | SPEC-008 | GUI 整体设计与多尺寸适配 | developing |
 | SPEC-009 | 中英文语言切换 | implemented |
 | SPEC-010 | 断电重启自启动保障 | developing |
@@ -93,5 +93,13 @@ spec/
 | SPEC-017 | 基于 GitHub Release 的 OTA 更新 | implemented |
 | SPEC-018 | OK 键长按与陀螺仪飞鼠 | developing |
 | SPEC-019 | 应用快捷方式显示真实图标 | developing |
+| SPEC-020 | 盒端内置 Web 遥控页（PWA） | developing |
+| SPEC-021 | 直连飞鼠协议（Web 端空气鼠标） | developing |
+| SPEC-022 | 蓝牙 HID 跨端边界与降级引导 | developing |
+| SPEC-023 | 手机端触控板（直连 + 蓝牙） | developing |
+| SPEC-024 | 盒端显示网页遥控二维码 | developing |
+| SPEC-025 | 网页设备管理与触控板（删除飞鼠） | developing |
+| SPEC-026 | 直连方向键焦点边界翻页 | developing |
+| SPEC-027 | 启动自动探测更新与「有更新」标签 | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。
