@@ -685,7 +685,10 @@
         var label = document.createElement('span');
         label.textContent = app.name || app.pkg;
         btn.appendChild(label);
-        btn.addEventListener('click', function () { command('/api/app', { pkg: app.pkg }); });
+        btn.addEventListener('click', function () {
+          haptic();
+          command('/api/app', { pkg: app.pkg });
+        });
         box.appendChild(btn);
         // 图标加载失败时保留占位块，避免出现破图
         loadIcon(app.pkg).then(function (url) {
@@ -714,11 +717,15 @@
 
   function sendKey(code) { return command('/api/key', { code: code }); }
 
+  /* SPEC-034：按键短震动；不支持振动 API 的浏览器（如 iOS Safari）静默跳过 */
+  function haptic() { if (navigator.vibrate) navigator.vibrate(12); }
+
   function bindKeys() {
     var btns = document.querySelectorAll('[data-key]');
     for (var i = 0; i < btns.length; i++) {
       (function (btn) {
         btn.addEventListener('click', function () {
+          haptic();
           sendKey(parseInt(btn.getAttribute('data-key'), 10));
         });
       })(btns[i]);
@@ -732,6 +739,7 @@
 
     ok.addEventListener('pointerdown', function (e) {
       e.preventDefault();
+      haptic();
       longFired = false;
       longTimer = setTimeout(function () {
         longFired = true;
@@ -1164,6 +1172,7 @@
       var el = $('#text');
       var v = el.value;
       if (!v) return;
+      haptic();
       command('/api/text', { text: v }).then(function (ok) {
         if (ok) { el.value = ''; toast(t('sendOk')); }
       });

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.koco.tvremote"
-    android:versionCode="13"
-    android:versionName="1.6.9">
+    android:versionCode="14"
+    android:versionName="1.7.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <!-- SPEC-017：应用内升级需要发起安装会话 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- SPEC-034：按键震动反馈 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="30" />
 

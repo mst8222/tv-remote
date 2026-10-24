@@ -427,6 +427,11 @@ Known limitations:
 
 ## Versions
 
+- **v1.7.0**: remote keys on both the Android app and the box web remote now give a short
+  haptic pulse: D-pad, OK, Back/Home/Menu/Power, volume and mute, plus the air-mouse toggle,
+  app shortcuts and the text send button. A long OK press vibrates once on touch-down.
+  Browsers without the vibration API (such as iOS Safari) skip it silently without affecting
+  key behavior.
 - **v1.6.9**: fixes the information grouping of the box wide-screen layout: the QR code is back
   in the Address card (it opens exactly that address), while the Pair code card keeps only the
   code and its hint. The two columns are now equalized in total height with aligned bottom
