@@ -16,6 +16,9 @@
   网页端新增 `haptic()`（12ms），覆盖 `data-key` 按键、OK pointerdown、应用图标、发送按钮，
   并提升 Service Worker 缓存版本至 `tvrc-shell-v6`。双端 APK 编译通过，
   VIBRATE 权限已入包，APK 内 `app.js` / `sw.js` 已确认为新版本；真机震动效果待手工验收。
+- 2026-10-24 发布：双端版本升至 1.7.0（versionCode 14），代码与 README 已同步
+  Gitea、Gitee、GitHub 三个仓库，并在三个仓库发布 v1.7.0 Release（附双端 APK）；
+  真机震动效果仍待手工验收。
 
 ## 背景与目标
 
