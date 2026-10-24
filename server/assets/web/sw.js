@@ -1,5 +1,5 @@
 /* SPEC-020 PWA：缓存应用外壳，API 一律不缓存 */
-var CACHE = 'tvrc-shell-v5';
+var CACHE = 'tvrc-shell-v6';
 var SHELL = [
   '/',
   '/index.html',

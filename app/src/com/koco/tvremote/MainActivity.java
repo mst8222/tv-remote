@@ -25,6 +25,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -72,6 +74,8 @@ public class MainActivity extends Activity {
             BADGE = 0xFFF07A1A;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    /** SPEC-034：按键震动反馈 */
+    private Vibrator vibrator;
     /** SPEC-019：应用图标内存缓存，键为「设备 IP|包名」，避免切设备串图 */
     private final Map<String, Bitmap> iconCache = new HashMap<>();
     private TextView status;
@@ -198,6 +202,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sp = getSharedPreferences("tvremote", MODE_PRIVATE);
+        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         loadDevices();
         setContentView(buildUi());
         updateModeUi();
@@ -733,6 +738,7 @@ public class MainActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     // 按住期间禁止外层滚动容器拦截，否则手指轻微移动会变成 ACTION_CANCEL
                     v.getParent().requestDisallowInterceptTouchEvent(true);
+                    haptic();
                     okDownAt = SystemClock.uptimeMillis();
                     okLongFired = false;
                     okDown();
@@ -840,7 +846,10 @@ public class MainActivity extends Activity {
         b.setTextSize(sysIcon + 2);
         b.setGravity(Gravity.CENTER);
         b.setBackground(ripple(SURFACE2, mouseD / 2f, 0));
-        b.setOnClickListener(v -> toggleAirMouse());
+        b.setOnClickListener(v -> {
+            haptic();
+            toggleAirMouse();
+        });
         mouseBtn = b;
         return b;
     }
@@ -1004,6 +1013,7 @@ public class MainActivity extends Activity {
         send.setOnClickListener(v -> {
             String t = et.getText().toString().trim();
             if (t.isEmpty()) return;
+            haptic();
             doText(t);
             et.setText("");
         });
@@ -1078,7 +1088,10 @@ public class MainActivity extends Activity {
         cell.setGravity(Gravity.CENTER_HORIZONTAL);
 
         FrameLayout slot = new FrameLayout(this);
-        slot.setOnClickListener(v -> doApp(pkg));
+        slot.setOnClickListener(v -> {
+            haptic();
+            doApp(pkg);
+        });
 
         TextView icon = new TextView(this);
         icon.setText(label.substring(0, 1));
@@ -1588,7 +1601,14 @@ public class MainActivity extends Activity {
 
     // ---------------- 遥控逻辑 ----------------
 
+    /** SPEC-034：按键短震；没有振动马达的设备静默跳过 */
+    private void haptic() {
+        if (vibrator == null || !vibrator.hasVibrator()) return;
+        vibrator.vibrate(VibrationEffect.createOneShot(15, VibrationEffect.DEFAULT_AMPLITUDE));
+    }
+
     private void press(int code) {
+        haptic();
         if (lanMode) {
             lanPress(code);
             return;

@@ -107,5 +107,6 @@ spec/
 | SPEC-031 | 「有更新」标签橘色背景 | developing |
 | SPEC-032 | 无障碍根节点为空时的 OK 键回退 | developing |
 | SPEC-033 | 盒端界面宽屏双栏与二维码前置 | developing |
+| SPEC-034 | 遥控按键震动反馈 | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。
