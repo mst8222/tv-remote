@@ -65,5 +65,6 @@
 4. App 内弹 Dialog 必须 `runOnUiThread`。
 5. NsdManager 同一 listener 不能注册两个服务类型。
 6. 手工编译：`-source 8 -target 8`；lambda 需 core-lambda-stubs.jar 进
-   bootclasspath；`java.util.Base64` 是 API 26+，故 minSdk=26。
+   bootclasspath；`java.util.Base64` 是 API 26+。手机端 minSdk 26；盒端 minSdk 22（SPEC-035），
+   故盒端代码不得使用 `java.util.Base64`，`WebServer` 自带 `b64Encode/b64Decode`。
 7. keys/ 与 KeyConst.java 不入库（.gitignore），release.jks 丢失则无法覆盖升级。

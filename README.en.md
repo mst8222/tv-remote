@@ -136,6 +136,8 @@ The box also ships a built-in web remote: open `http://<box-ip>:17880` in any br
 LAN, with nothing to install. The box screen shows a QR code for that address with the pairing code embedded, so a phone
 camera opens it and pairs automatically — no address or code to type. After trusting the self-signed certificate,
 `https://<box-ip>:17843` adds install-to-home-screen and an offline shell.
+iOS / iPadOS Safari has no install button: use Share → Add to Home Screen (the page shows
+this hint at the top). macOS Safari 14+ uses File → Add to Dock.
 
 The web remote also manages multiple boxes: paired boxes are remembered in browser storage and can be
 switched from the device bar at the top. On an HTTPS page, "Scan to add" reads another box's QR code;
@@ -185,7 +187,11 @@ offers a D-pad / Touch / Mouse switch and no longer provides an air mouse.
 |---|---|---|
 | Phone · LAN direct | Android 8.0 (API 26) | Android 13 (Samsung Note20) |
 | Phone · Bluetooth HID | Android 9.0 (API 28) | Android 13 (Samsung Note20) |
-| Box app | Android 8.0 (API 26) | Android 12 (H96 Max V56), Android 13 (Samsung Fold3) |
+| Box app · Standard build | Android 8.0 (API 26) | Android 12 (H96 Max V56), Android 13 (Samsung Fold3) |
+| Box app · Legacy build | Android 5.1 (API 22) | Android 5.1.1 (Redmi TV MiTV-ANTL0) |
+
+> Both box APKs share the same package name and version code; install the one that matches the
+> box OS. The legacy build cannot use absolute touch (synthesized gestures) on API 22 firmware.
 
 Box requirements:
 
@@ -194,6 +200,9 @@ Box requirements:
 2. Install "TV Remote Service" and **enable its accessibility service manually**:
    Box Settings → Accessibility → TV Remote Service.
    Without it, key/text commands return `ERR a11y`; volume, app launch and app list still work.
+   For apps that only react to real key events (e.g. cloud TV players), switch "Injection"
+   to ADB on the box: enable ADB / USB debugging once in Developer options, then press OK
+   on the box screen (the TV asks once to allow the connection).
 3. **Root is not required.** The box side uses `AccessibilityService`, `AudioManager` and `PackageManager`.
 4. Keep the box on the network. The service runs as a foreground service with a notification and is
    started on boot; on firmware that restricts background startup, allow the app to auto-start.
@@ -209,9 +218,11 @@ Network requirements:
 
 ### 1. Box side
 
-1. Install `dist/TVRemoteServer.apk` (USB drive or `adb install`).
-2. Open "TV Remote Service" and allow notifications. The screen shows the **6-digit pair code**
-   and the box IP.
+1. Install the APK that matches the box OS (USB drive or `adb install`):
+   - Android 8.0 and above: `dist/TVRemoteServer.apk` (standard);
+   - Android 5.1: `dist/TVRemoteServer-android5.apk` (legacy).
+2. Open "TV Remote Service" and allow notifications. The screen shows the **6-digit pair code**,
+   the box IP and a QR code.
 3. Open box Settings → Accessibility and enable "TV Remote Service".
 4. Leave the service running; it starts automatically on boot/reboot.
 
@@ -222,7 +233,8 @@ Network requirements:
 
 1. Install `dist/TVRemote.apk`; connect the phone to the same Wi-Fi as the box.
 2. Open the app. Tap "Scan" and pick the box in the result list, or tap "Add" and enter a name and IP.
-3. Tap "Direct", enter the 6-digit code shown on the box, then "Pair and connect".
+3. Tap "Direct"; in the dialog you can tap "Scan" to read the QR code on the box screen
+   (IP and pairing code are filled automatically), or type the 6-digit code and tap "Pair and connect".
 4. The remote is ready. Pairing is stored per box IP and restored automatically next time.
 
 > The device list ships with two sample entries (荐片TV · RK3566, 三星 Fold3).
@@ -234,11 +246,13 @@ Network requirements:
 <details>
 <summary><strong>Show Bluetooth pairing steps</strong></summary>
 
-1. Enable Bluetooth on the phone; on the box, open Bluetooth and start searching for devices.
-2. Tap "BT" in the app. If no device is paired yet, tap "Let the box find this phone"
-   (makes the phone discoverable for 120 seconds).
-3. Select the phone in the box Bluetooth list and confirm the pairing code on both sides.
-4. Return to the app, tap "BT" again and choose the paired box. Wait for "Bluetooth connected".
+1. Enable Bluetooth on the phone; on the box, open Bluetooth and stay on the device / pairing page
+   (keep it discoverable).
+2. Tap "BT" in the app, then "Scan nearby devices" and pick the box; confirm the pairing code on
+   both sides and the phone connects automatically. If the box cannot see the phone, tap
+   "Let the box find this phone" (discoverable for 120 seconds).
+3. Alternatively, pair from the box side as before: select this phone in the box Bluetooth list.
+4. Once "Bluetooth connected" is shown the remote works; the connection mode is remembered per device.
 
 </details>
 
@@ -275,9 +289,9 @@ Touch mode uses `MTAPN` / `MLONGN` / `MSWIPEN` (absolute coordinates).
 |---|---|---|
 | `PING` | `PONG` | Liveness check, no auth |
 | `PAIR <6-digit code>` | `OK <token>` / `ERR badcode` | Exchange the pair code for a long-lived token |
-| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Inject a key |
-| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only): `ACTION_LONG_CLICK` when the focused node supports it, otherwise a synthetic 600 ms gesture at the focus center |
-| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field |
+| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR adb` / `ERR cmd` / `ERR exec` | Inject a key; ADB mode sends a real key event |
+| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR adb` / `ERR cmd` / `ERR exec` | Long-press injection (keycode 23/OK only): `ACTION_LONG_CLICK` when the focused node supports it, otherwise a synthetic 600 ms gesture at the focus center |
+| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR adb` / `ERR exec` | Write UTF-8 text (base64 encoded) into the focused field; ADB mode uses `input text` for plain ASCII |
 | `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
 | `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
 | `ICON <token> <package>` | `OK <base64(PNG)>` / `ERR arg` | App icon (144x144 PNG); accessibility not required; unknown package returns `ERR arg` |
@@ -341,12 +355,14 @@ Requirements:
 - Android SDK: `build-tools/36.1.0`, `platforms/android-35`
 
 ```powershell
-python build.py app       # -> dist/TVRemote.apk
-python build.py server    # -> dist/TVRemoteServer.apk
+python build.py app       # -> dist/TVRemote.apk (API 26)
+python build.py server    # -> dist/TVRemoteServer.apk (standard, API 26)
+                          # -> dist/TVRemoteServer-android5.apk (legacy, API 22)
 ```
 
 `build.py` looks for the SDK under `%LOCALAPPDATA%\Android\Sdk`. The chain is
 aapt2 → javac → d8 → dex packaging → zipalign → apksigner.
+Both box APKs are uploaded to the same release; in-app updates pick the asset that matches the OS.
 
 > [!WARNING]
 > `keys/` is not committed (`.gitignore`). If `keys/release.jks` is lost, existing installations
@@ -427,6 +443,16 @@ Known limitations:
 
 ## Versions
 
+- **v1.7.2**: fixes the web remote not vibrating when opened from a home-screen icon (PWA):
+  vibration now fires on pointer-down instead of the click phase. The box QR card gains a
+  three-platform "add to home screen" guide (iOS: Share → Add to Home Screen; HarmonyOS:
+  Menu → Add to home screen; Android Chrome/Edge: Menu → Install app), noting that iOS
+  Safari cannot vibrate web pages and that HarmonyOS/Android need system touch vibration on.
+- **v1.7.1**: LAN pairing can now scan the QR code shown on the box with the phone camera and fill
+  in the IP and pairing code automatically; Bluetooth mode adds "Scan nearby devices" so the phone
+  can discover the box and start system pairing, connecting automatically once paired. The box build
+  now produces two APKs: standard `TVRemoteServer.apk` (Android 8.0+) and legacy
+  `TVRemoteServer-android5.apk` (Android 5.1); in-app updates pick the one matching the OS.
 - **v1.7.0**: remote keys on both the Android app and the box web remote now give a short
   haptic pulse: D-pad, OK, Back/Home/Menu/Power, volume and mute, plus the air-mouse toggle,
   app shortcuts and the text send button. A long OK press vibrates once on touch-down.
@@ -505,6 +531,8 @@ Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE):
   commercial license from the author (mst8222@163.com).
 
 Redistributions and modified works must retain this license and copyright notice.
+
+The phone app bundles [ZXing core](https://github.com/zxing/zxing) (Apache-2.0) for QR recognition.
 
 ---
 

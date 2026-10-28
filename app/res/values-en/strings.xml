@@ -97,12 +97,34 @@
     <string name="bt_web_addr_unknown">Check the address on the box screen (TV Remote Service)</string>
     <string name="ok_got_it">Got it</string>
     <string name="bt_none_title">No paired devices yet</string>
-    <string name="bt_none_msg">The box must search for this phone:\n\n1. Tap "Let the box find this phone"\n2. On the box: Settings → Bluetooth, choose this phone\n3. Confirm the code on both sides, then tap "BT"</string>
+    <string name="bt_none_msg">You can scan and pair from the phone:\n\n1. Tap "Scan nearby devices"\n2. Keep Bluetooth discoverable in the box Settings → Bluetooth, then pick this phone\n3. Confirm the code on both sides; the phone connects automatically\n\nIf the box cannot find this phone, tap "Let the box find this phone".</string>
     <string name="bt_open_settings">Open Bluetooth settings</string>
     <string name="bt_pick_title">Choose a paired box</string>
     <string name="bt_none_found">No paired Bluetooth devices</string>
     <string name="bt_device">Device</string>
     <string name="scan_none_msg">Possible causes:\n· "TV Remote Service" is not running on the box\n· Phone and box are not on the same WiFi\n· Router has AP isolation enabled\n\nYou can also tap "Add" to enter the box IP manually.</string>
+
+    <!-- SPEC-036 QR pairing -->
+    <string name="lan_scan">Scan</string>
+    <string name="add_scan">Scan to add</string>
+    <string name="qr_title">Scan the box QR code</string>
+    <string name="qr_hint">Point the camera at the QR code on the TV; the IP and pairing code are filled automatically</string>
+    <string name="qr_invalid">Not a box pairing code; point at the QR code shown on the TV</string>
+    <string name="camera_denied">Camera permission denied; allow it in Settings or enter the IP and code manually</string>
+    <string name="camera_unavailable">Cannot open the camera; make sure it is not used by another app</string>
+
+    <!-- SPEC-037 Bluetooth scanning and pairing -->
+    <string name="bt_scan_action">Scan nearby devices</string>
+    <string name="bt_scan_title">Bluetooth scan</string>
+    <string name="bt_scan_tip">Open Bluetooth in the box Settings and stay on that page; some boxes must enter pairing mode to be discoverable</string>
+    <string name="bt_scanning">Searching nearby devices…</string>
+    <string name="bt_scan_none">No devices found; make sure the box Bluetooth is on and discoverable</string>
+    <string name="bt_bonded_tag">Paired</string>
+    <string name="bt_unbonded_tag">Not paired</string>
+    <string name="bt_bonding">Pairing %1$s; confirm the code on the box…</string>
+    <string name="bt_bond_fail">Pairing failed; make sure the box is discoverable and retry</string>
+    <string name="bt_perm_location">Location permission is required for nearby Bluetooth scanning</string>
+    <string name="bt_enable_first">Turn on phone Bluetooth first</string>
 
     <!-- Group card titles (SPEC-012) -->
     <string name="grp_remote">Remote</string>

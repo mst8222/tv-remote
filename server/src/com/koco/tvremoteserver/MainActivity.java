@@ -38,9 +38,15 @@ public class MainActivity extends Activity {
             GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A;
 
     private TextView statusView, ipView, codeView, a11yView, updateView, updateBtn;
+    /** SPEC-039：注入模式行与 ADB 调试状态行（均可聚焦点击） */
+    private TextView injectView, adbView;
+    /** ADB 后台探测进行中，避免 tick 每 3 秒重复起线程 */
+    private boolean probing;
     /** SPEC-024：网页遥控二维码与其提示；qrKey 记录当前二维码对应的 IP + 配对码 */
     private ImageView qrView;
     private TextView qrTip;
+    /** 二维码下方三平台「添加到桌面」说明，跟随二维码一起显示/隐藏 */
+    private TextView homeTip;
     private String qrKey;
     /** SPEC-033：宽屏双栏只做一次高度对齐，避免每次布局都改参数 */
     private boolean fitted;
@@ -87,6 +93,13 @@ public class MainActivity extends Activity {
         a11yView.setFocusable(true);
         a11yView.setOnClickListener(v -> openA11ySettings());
         statusCard.addView(a11yView);
+
+        // SPEC-039：注入模式（无障碍 / ADB）+ ADB 调试状态。
+        // 盒子界面不响应触摸，同样设为可聚焦，用遥控导航后按 OK 触发
+        injectView = buildRow(statusCard);
+        bindRow(injectView, this::onInjectToggle);
+        adbView = buildRow(statusCard);
+        bindRow(adbView, this::onAdbAction);
 
         // 配对码卡：大号蓝字 + 使用提示（二维码属于「连接地址」，见下）
         LinearLayout pairCard = card(R.string.ui_grp_pair);
@@ -135,6 +148,18 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         qtp.topMargin = dp(10);
         addrCard.addView(qrTip, qtp);
+
+        // 二维码下方：三平台「添加到手机桌面」操作说明，方便下次一键打开
+        homeTip = new TextView(this);
+        homeTip.setText(R.string.ui_home_tip);
+        homeTip.setTextSize(12);
+        homeTip.setTextColor(SUB);
+        homeTip.setLineSpacing(dp(4), 1f);
+        homeTip.setVisibility(View.GONE);
+        LinearLayout.LayoutParams htp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        htp.topMargin = dp(12);
+        addrCard.addView(homeTip, htp);
 
         // 版本更新卡（SPEC-017）：状态文字 + 检查更新/下载安装按钮，均可遥控聚焦
         LinearLayout updateCard = card(R.string.ui_grp_update);
@@ -331,6 +356,112 @@ public class MainActivity extends Activity {
         return srow;
     }
 
+    // ---------------- SPEC-039 注入模式与 ADB 调试 ----------------
+
+    /** 状态卡内的可点击文字行：13sp，行间留 8dp */
+    private TextView buildRow(LinearLayout parent) {
+        TextView v = new TextView(this);
+        v.setTextSize(13);
+        v.setTextColor(SUB);
+        v.setPadding(0, dp(8), 0, 0);
+        parent.addView(v);
+        return v;
+    }
+
+    /**
+     * 盒子界面不响应触摸：设为可聚焦，并在遥控 OK/ENTER 时显式触发点击
+     * （实测 H96 Android 12 可聚焦 TextView 不自动响应 OK）。
+     */
+    private void bindRow(final TextView v, final Runnable action) {
+        v.setClickable(true);
+        v.setFocusable(true);
+        v.setOnClickListener(x -> action.run());
+        v.setOnKeyListener((view, keyCode, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_UP
+                    && (keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
+                view.performClick();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    /** 切换注入模式；切到 ADB 后立即后台握手一次，状态由 tick 反映 */
+    private void onInjectToggle() {
+        final boolean next = !AdbShell.enabled(this);
+        AdbShell.setEnabled(this, next);
+        if (next) probeAdb();
+        tick();
+    }
+
+    /**
+     * ADB 调试行点击：
+     *   已连接 → 打开开发者选项（便于排查）
+     *   有 WRITE_SECURE_SETTINGS → 直接打开 ADB 调试（首次连接需电视确认）
+     *   没有权限 → 引导到开发者选项，由用户手动打开
+     */
+    private void onAdbAction() {
+        if (AdbShell.isConnected()) {
+            openDevSettings();
+            return;
+        }
+        if (!AdbShell.enabled(this)) AdbShell.setEnabled(this, true);
+        if (AdbShell.hasSecureWrite(this) && AdbShell.enableAdb(this)) {
+            adbView.setText(R.string.ui_adb_on);
+            adbView.setTextColor(GREEN);
+            probeAdb();
+            return;
+        }
+        adbView.setText(R.string.ui_adb_manual);
+        adbView.setTextColor(RED);
+        openDevSettings();
+    }
+
+    /** 后台握手一次（adbd 由系统重启后需等 1 秒左右） */
+    private void probeAdb() {
+        if (probing) return;
+        probing = true;
+        new Thread(() -> {
+            try {
+                Thread.sleep(1200);
+            } catch (InterruptedException ignored) {
+            }
+            AdbShell.probe(MainActivity.this);
+            probing = false;
+            h.post(MainActivity.this::tick);
+        }, "adb-probe").start();
+    }
+
+    /** SPEC-039：跳系统开发者选项；个别电视没有该页面时退回设置首页 */
+    private void openDevSettings() {
+        Intent i = new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** 按当前模式与连接状态刷新两行文字 */
+    private void updateInjectRows(boolean adbMode) {
+        injectView.setText(adbMode ? R.string.ui_inject_adb : R.string.ui_inject_a11y);
+        injectView.setTextColor(adbMode ? ACCENT : SUB);
+        if (!adbMode) {
+            adbView.setText(R.string.ui_adb_off);
+            adbView.setTextColor(SUB);
+            return;
+        }
+        boolean connected = AdbShell.isConnected();
+        adbView.setText(connected ? R.string.ui_adb_connected : R.string.ui_adb_disconnected);
+        adbView.setTextColor(connected ? GREEN : RED);
+    }
+
     // ---------------- OTA 更新（SPEC-017） ----------------
 
     /** 按钮语义：有待安装版本则下载安装，否则重新检查 */
@@ -417,6 +548,10 @@ public class MainActivity extends Activity {
         boolean a11y = TvRemoteAccessibilityService.isReady();
         a11yView.setText(getString(a11y ? R.string.ui_a11y_ok : R.string.ui_a11y_missing));
         a11yView.setTextColor(a11y ? GREEN : RED);
+        // SPEC-039：注入模式与 ADB 连接状态；ADB 模式下未连通时在后台重试
+        boolean adbMode = AdbShell.enabled(this);
+        updateInjectRows(adbMode);
+        if (adbMode && !AdbShell.isConnected() && !probing) probeAdb();
         h.postDelayed(this::tick, 3000);
     }
 
@@ -428,11 +563,13 @@ public class MainActivity extends Activity {
         if (ip.equals(getString(R.string.ui_no_network))) {
             qrView.setVisibility(View.GONE);
             qrTip.setVisibility(View.GONE);
+            homeTip.setVisibility(View.GONE);
             qrKey = null;
             return;
         }
         qrView.setVisibility(View.VISIBLE);
         qrTip.setVisibility(View.VISIBLE);
+        homeTip.setVisibility(View.VISIBLE);
         String key = ip + "\n" + code;
         if (key.equals(qrKey)) return;
         qrKey = key;

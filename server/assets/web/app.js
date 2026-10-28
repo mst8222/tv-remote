@@ -51,6 +51,7 @@
       sendOk: '已发送',
       sendFail: '发送失败',
       secureHint: '当前是 HTTP 页面：遥控功能可用，但无法安装到主屏幕或离线使用；改用 https:// 地址可获得完整能力。',
+      iosHint: '添加到主屏幕：点底部「分享」→「添加到主屏幕」，即可像 App 一样全屏使用。',
       errAuth: '配对已失效，请重新配对',
       errA11y: '盒子无障碍服务未开启，请在盒子上开启后重试',
       errCmd: '盒子不支持该按键',
@@ -108,6 +109,7 @@
       sendOk: 'Sent',
       sendFail: 'Send failed',
       secureHint: 'This is an HTTP page: the remote works, but install and offline mode require an https:// address.',
+      iosHint: 'Add to Home Screen: tap Share, then "Add to Home Screen" to use it full screen like an app.',
       errAuth: 'Pairing expired, please pair again',
       errA11y: 'Accessibility service is off on the box',
       errCmd: 'The box does not support this key',
@@ -685,8 +687,8 @@
         var label = document.createElement('span');
         label.textContent = app.name || app.pkg;
         btn.appendChild(label);
+        bindHaptic(btn);
         btn.addEventListener('click', function () {
-          haptic();
           command('/api/app', { pkg: app.pkg });
         });
         box.appendChild(btn);
@@ -717,15 +719,37 @@
 
   function sendKey(code) { return command('/api/key', { code: code }); }
 
-  /* SPEC-034：按键短震动；不支持振动 API 的浏览器（如 iOS Safari）静默跳过 */
-  function haptic() { if (navigator.vibrate) navigator.vibrate(12); }
+  /* SPEC-034：按键短震动。放在 pointerdown 触发：桌面模式（standalone）下
+     click 阶段部分浏览器已不再把振动当作即时用户手势；首次触摸先做 1ms 解锁。
+     不支持振动 API 的浏览器（iOS / 鸿蒙）静默跳过。 */
+  var hapticOn = false;
+  function haptic() {
+    if (!navigator.vibrate) return;
+    try {
+      if (!hapticOn) {
+        navigator.vibrate(1);
+        hapticOn = true;
+      }
+      navigator.vibrate(12);
+    } catch (e) {
+    }
+  }
+
+  /* 震动与动作解耦：按下即震，click 只负责发命令（pointer/touch 二选一，避免重复震） */
+  function bindHaptic(el) {
+    if (window.PointerEvent) {
+      el.addEventListener('pointerdown', haptic);
+    } else {
+      el.addEventListener('touchstart', haptic, { passive: true });
+    }
+  }
 
   function bindKeys() {
     var btns = document.querySelectorAll('[data-key]');
     for (var i = 0; i < btns.length; i++) {
       (function (btn) {
+        bindHaptic(btn);
         btn.addEventListener('click', function () {
-          haptic();
           sendKey(parseInt(btn.getAttribute('data-key'), 10));
         });
       })(btns[i]);
@@ -1168,11 +1192,14 @@
     $('#segDpad').addEventListener('click', function () { setPadMode('dpad', true); });
     $('#segPad').addEventListener('click', function () { setPadMode('touch', true); });
     $('#segMouse').addEventListener('click', function () { setPadMode('mouse', true); });
+    bindHaptic($('#sendBtn'));
+    bindHaptic($('#segDpad'));
+    bindHaptic($('#segPad'));
+    bindHaptic($('#segMouse'));
     $('#sendBtn').addEventListener('click', function () {
       var el = $('#text');
       var v = el.value;
       if (!v) return;
-      haptic();
       command('/api/text', { text: v }).then(function (ok) {
         if (ok) { el.value = ''; toast(t('sendOk')); }
       });
@@ -1194,6 +1221,21 @@
     bindPad();
   }
 
+  /* iOS Safari 不提供 PWA 安装按钮，只能「分享 → 添加到主屏幕」；
+     已在桌面上打开（standalone）或其它浏览器时不提示 */
+  function isIosSafari() {
+    var ua = navigator.userAgent || '';
+    var ios = /iPad|iPhone|iPod/.test(ua) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return ios && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  }
+
+  function isStandalone() {
+    if (window.navigator.standalone === true) return true;
+    return !!(window.matchMedia &&
+              window.matchMedia('(display-mode: standalone)').matches);
+  }
+
   function boot() {
     loadDevices();
     applyI18n();
@@ -1205,6 +1247,11 @@
     if (!window.isSecureContext) {
       $('#secureHint').hidden = false;
       $('#secureHint').textContent = t('secureHint');
+    }
+    // iOS Safari 没有安装按钮：页面顶部提示「分享 → 添加到主屏幕」
+    if (isIosSafari() && !isStandalone()) {
+      $('#iosHint').hidden = false;
+      $('#iosHint').textContent = t('iosHint');
     }
 
     var hashCode = hashPairCode();

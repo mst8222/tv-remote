@@ -48,7 +48,7 @@
 |---|---|
 | 控制端 | Android 手机（开发与验证：三星 Note20 / Android 13） |
 | 被控端 | Android 电视盒子（H96 Max V56 / Android 12、三星 Fold3 / Android 13） |
-| 运行前提 | 手机与盒子同一局域网；盒子端开启无障碍（无需 root） |
+| 运行前提 | 手机与盒子同一局域网；盒子端开启无障碍（无需 root）；重按键场景可再开 ADB 注入模式 |
 | 构建方式 | 手工编译链，无第三方依赖，两端 APK 约 100–130 KB |
 
 把手机变成电视盒子的全能遥控器，主要解决三类日常问题：
@@ -120,6 +120,8 @@
 | 适用场景 | 日常首选，功能完整，重启自愈 | 盒子没装 App、或临时应急 |
 
 > 直连的按键与文字由盒子端无障碍服务注入，应用启动和音量不依赖无障碍；
+> 盒子端可把「注入模式」切成 ADB（自连本机 adbd，等同蓝牙遥控的真实按键），
+> 用于云视听小电视等只认真实按键的应用，需在系统开发者选项打开一次 ADB 调试。
 > 蓝牙模式要求手机 App 保持在前台（Android 会在应用退到后台时注销 HID 注册，回到前台会自动重新注册）。
 
 ## 跨端能力矩阵
@@ -129,6 +131,8 @@
 盒子界面会直接显示该地址的二维码，并已带上配对码；手机相机扫一下即可打开并
 自动完成配对，无需输入地址与配对码。
 信任自签证书后可用 `https://<盒子IP>:17843` 获得安装到主屏幕与离线外壳能力。
+iOS / iPadOS 的 Safari 不提供安装按钮，打开页面后点「分享 → 添加到主屏幕」即可
+（页面顶部会给出这条提示）；macOS Safari 14+ 用菜单「文件 → 添加到程序坞」。
 
 网页遥控同样支持多设备：配对过的盒子记在浏览器本地，顶部设备栏可随时切换；
 在 HTTPS 页面点「扫码添加」可直接扫描另一台盒子的二维码入列，也可手动输入地址与配对码，
@@ -177,7 +181,11 @@
 |---|---|---|
 | 手机端 · 直连模式 | Android 8.0（API 26） | Android 13（三星 Note20） |
 | 手机端 · 蓝牙 HID 模式 | Android 9.0（API 28） | Android 13（三星 Note20） |
-| 盒子端 App | Android 8.0（API 26） | Android 12（H96 Max V56）、Android 13（三星 Fold3） |
+| 盒子端 App · 正常版 | Android 8.0（API 26） | Android 12（H96 Max V56）、Android 13（三星 Fold3） |
+| 盒子端 App · 低版本版 | Android 5.1（API 22） | Android 5.1.1（Redmi 电视 MiTV-ANTL0） |
+
+> 两个盒子端安装包同包名、同版本号，按盒子系统选择其中一个安装即可；低版本版受系统限制，
+> 不支持触控板的绝对触摸（合成手势），具体见「适用范围与已知限制」。
 
 盒子端要求：
 
@@ -185,6 +193,8 @@
 2. 安装「TV遥控服务」并**手动开启无障碍服务**：盒子「设置 → 无障碍 → TV遥控服务」。
    未开启时按键/文字返回 `ERR a11y`；音量、应用启动、应用列表仍可用。
 3. **不需要 root**，盒端通过 `AccessibilityService`、`AudioManager`、`PackageManager` 完成控制。
+   需要更彻底的按键兼容时可切「注入模式」到 ADB：先在系统开发者选项打开
+   ADB / USB 调试，盒端界面按 OK 连接（首次连接电视会问一次「允许」）。
 4. 建议盒子保持联网（有线或 WiFi）。服务以前台通知常驻，并在开机/重启后自动拉起；
    个别固件有后台限制时，需在系统设置中允许本应用自启。
 5. 盒子端界面在部分固件上不响应触摸（实测 H96），可用盒子自带遥控器聚焦后按 OK，
@@ -199,8 +209,10 @@
 
 ### 1. 安装盒子端
 
-1. 安装 `dist/TVRemoteServer.apk`（U 盘安装或 `adb install`）。
-2. 打开「TV遥控服务」，允许通知权限。界面会显示 **6 位配对码** 和 **本机 IP**。
+1. 按盒子系统选择安装包（U 盘安装或 `adb install`）：
+   - Android 8.0 及以上：`dist/TVRemoteServer.apk`（正常版）；
+   - Android 5.1：`dist/TVRemoteServer-android5.apk`（低版本版）。
+2. 打开「TV遥控服务」，允许通知权限。界面会显示 **6 位配对码**、**本机 IP** 和二维码。
 3. 进入盒子「设置 → 无障碍」，开启「TV遥控服务」。
 4. 之后保持服务运行即可；开机/重启会自动启动。
 
@@ -210,7 +222,8 @@
 
 1. 安装 `dist/TVRemote.apk`，手机与盒子连同一个 WiFi。
 2. 打开 App。点顶部「扫描」，在扫描结果里点选盒子；或点「添加」手动填写名称和 IP。
-3. 点「直连」，输入盒子屏幕上的 6 位配对码，点「配对并连接」。
+3. 点「直连」；弹窗里可以点「扫码」直接扫描盒子屏幕上的二维码（自动带出 IP 与配对码），
+   也可以手动输入 6 位配对码后点「配对并连接」。
 4. 配对成功后即可按键。配对信息按盒子 IP 保存，下次打开自动恢复。
 
 > 首次启动的设备列表自带两条示例设备（荐片TV · RK3566、三星 Fold3）。
@@ -221,10 +234,11 @@
 <details>
 <summary><strong>展开蓝牙配对步骤</strong></summary>
 
-1. 手机打开蓝牙；盒子打开蓝牙并进入「搜索设备」。
-2. 手机点「蓝牙」。若还没有已配对设备，点「让盒子搜索这台手机」（开启 120 秒可见）。
-3. 在盒子蓝牙列表中选择这台手机，两边确认配对码。
-4. 回到 App 再点「蓝牙」，选择刚配对的盒子，状态显示「蓝牙已连接」后即可按键。
+1. 手机打开蓝牙；盒子打开蓝牙并停留在「设备列表 / 配对」页面（保持可被发现）。
+2. 手机点「蓝牙」，再点「扫描附近蓝牙设备」，在列表里点选盒子；
+   两边确认配对码后自动连接。盒子端搜不到手机时，也可以点「让盒子搜索这台手机」（开启 120 秒可见）。
+3. 如果盒子上无法选中本机，也可以按传统方式：在盒子蓝牙列表中选择这台手机，两边确认配对码。
+4. 配对完成后状态显示「蓝牙已连接」即可按键；连接方式按设备记忆，下次自动使用。
 
 </details>
 
@@ -261,9 +275,9 @@
 |---|---|---|
 | `PING` | `PONG` | 探活，无需认证 |
 | `PAIR <6位配对码>` | `OK <token>` / `ERR badcode` | 用配对码换长期 token |
-| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | 注入按键 |
-| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR cmd` / `ERR exec` | 长按注入（仅 23/OK），焦点节点可长按则执行 `ACTION_LONG_CLICK`，否则按焦点中心合成 600ms 手势 |
-| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR exec` | 写入当前输入框（base64 编码 UTF-8） |
+| `KEY <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR adb` / `ERR cmd` / `ERR exec` | 注入按键；ADB 注入模式下发真实按键事件 |
+| `KEYLONG <token> <keycode>` | `OK` / `ERR auth` / `ERR a11y` / `ERR adb` / `ERR cmd` / `ERR exec` | 长按注入（仅 23/OK），焦点节点可长按则执行 `ACTION_LONG_CLICK`，否则按焦点中心合成 600ms 手势 |
+| `TEXT <token> <base64>` | `OK` / `ERR a11y` / `ERR adb` / `ERR exec` | 写入当前输入框（base64 编码 UTF-8）；ADB 模式下纯 ASCII 走 `input text`，其它字符走无障碍 |
 | `APP <token> <包名>` | `OK` / `ERR exec` | 启动应用，不依赖无障碍 |
 | `LIST <token>` | `OK <包名\|base64(应用名),逗号分隔>` | 第三方可启动应用列表，不依赖无障碍 |
 | `ICON <token> <包名>` | `OK <base64(PNG)>` / `ERR arg` | 应用图标（144x144 PNG），不依赖无障碍；未知包返回 `ERR arg` |
@@ -272,9 +286,9 @@
 | `MTAP <token>` | `OK` / `ERR a11y` | 光标处单击，节点优先、手势兜底 |
 | `MLONG <token>` | `OK` / `ERR a11y` | 光标处长按 |
 | `SCROLL <token> <步数>` | `OK` / `ERR arg` / `ERR a11y` | 双指滚动，正数向下、负数向上，范围 -5..5 |
-| `MTAPN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` | 绝对点按，x/y 为 0..10000 的归一化屏幕坐标 |
-| `MLONGN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` | 绝对长按，坐标同 `MTAPN` |
-| `MSWIPEN <token> <x1> <y1> <x2> <y2> <ms>` | `OK` / `ERR arg` / `ERR a11y` | 绝对滑动，坐标 0..10000，时长 50..1500ms |
+| `MTAPN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` / `ERR adb` | 绝对点按，x/y 为 0..10000 的归一化屏幕坐标 |
+| `MLONGN <token> <x> <y>` | `OK` / `ERR arg` / `ERR a11y` / `ERR adb` | 绝对长按，坐标同 `MTAPN` |
+| `MSWIPEN <token> <x1> <y1> <x2> <y2> <ms>` | `OK` / `ERR arg` / `ERR a11y` / `ERR adb` | 绝对滑动，坐标 0..10000，时长 50..1500ms |
 
 UDP 8898 广播格式：`TVREMOTE|8899|<盒子型号>`，每 3 秒一次，供手机自动发现。
 
@@ -326,12 +340,14 @@ tv-remote/
 - Android SDK：`build-tools/36.1.0`、`platforms/android-35`
 
 ```powershell
-python build.py app       # -> dist/TVRemote.apk
-python build.py server    # -> dist/TVRemoteServer.apk
+python build.py app       # -> dist/TVRemote.apk（API 26）
+python build.py server    # -> dist/TVRemoteServer.apk（正常版，API 26）
+                          # -> dist/TVRemoteServer-android5.apk（低版本版，API 22）
 ```
 
 `build.py` 默认从 `%LOCALAPPDATA%\Android\Sdk` 查找 SDK；构建链为
 aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
+盒端两个 APK 按系统版本分别上传到 Release，盒端应用内更新也会按当前系统选择对应资产。
 
 > [!WARNING]
 > `keys/` 不入库（`.gitignore`），`keys/release.jks` 丢失后无法覆盖升级已安装的 App，
@@ -355,6 +371,9 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 | 盒子重启后连不上 | 确认服务已自启；部分固件需允许应用自启，或重新打开一次 App |
 | 网页遥控打不开 | 确认与盒子在同一 WiFi，地址取盒端界面显示的 `http://<IP>:17880`；`https://<IP>:17843` 需先在浏览器里信任自签证书 |
 | 顶栏出现「有更新」 | App 每次启动自动探测 GitHub 与 Gitee 的最新 Release，任一源有更高版本时提示；点击标签查看更新说明，忽略不影响使用 |
+| 云视听小电视 / 自绘界面的 TV 应用里方向键、退出弹窗的确定键没反应 | 这些应用只认真实按键，无障碍注入到不了。在盒端「TV遥控服务」把「注入模式」切成 ADB，并在系统开发者选项打开 ADB 调试（首次连接电视会问一次「允许」），效果等同蓝牙遥控 |
+| 盒端显示「ADB 调试：未连接」 | 开发者选项里的 ADB/USB 调试被关掉了：按 OK 会自动跳到开发者选项（已授权时按 OK 会直接打开）；个别电视没有该页面时退回设置首页 |
+| 盒端显示「ADB 调试：未开启」 | 当前是无障碍注入模式；在「注入模式」行按 OK 切到 ADB，再按「ADB 调试」行连接 |
 
 ## 适用范围与已知限制
 
@@ -367,11 +386,15 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 
 已知限制：
 
-- 「电源」是系统锁屏，不能真正关机/开机；「菜单」是最近任务，不是传统菜单键。
+- 「电源」是系统锁屏，不能真正关机/开机；「菜单」在无障碍模式下是最近任务，
+  切换 ADB 注入模式后为真实菜单键。
 - 音量只调节盒子媒体音量，不控制电视或功放。
 - 文字输入要求当前界面存在可编辑输入框，且盒子输入法接受 `ACTION_SET_TEXT`。
 - 部分电视固件不支持 DPAD 全局动作（实测 H96 Android 12），已回退到焦点遍历；
-  界面没有可聚焦控件时方向键无效果。
+  界面没有可聚焦控件时方向键无效果。这类设备请切到 ADB 注入模式。
+- ADB 注入模式需要用户在系统开发者选项手动打开一次 ADB / USB 调试（Android 安全模型，
+  App 无法代开）；首次连接要在电视上点一次「允许」，之后永久免确认。
+  开启过一次后 App 会自授予 `WRITE_SECURE_SETTINGS`，盒端界面即可自行开关。
 - 蓝牙 HID 模式不支持文字输入与应用快捷，且 App 需保持前台。
 - OK 长按在蓝牙模式由盒子应用自行判定；直连模式依赖焦点节点支持
   `ACTION_LONG_CLICK`，不支持长按的应用无效果。
@@ -406,6 +429,15 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 
 ## 版本记录
 
+- **v1.7.2**：修复网页遥控从桌面图标（PWA）打开后按键无震动——震动改在按下瞬间
+  （pointerdown）触发，不再依赖 click 阶段；盒端二维码下方新增三平台「添加到手机桌面」
+  教程（iOS 分享 → 添加到主屏幕；鸿蒙 菜单 → 添加到桌面；安卓 Chrome/Edge
+  菜单 → 安装应用），并注明 iOS Safari 不支持网页震动、鸿蒙与安卓需开启系统
+  「触摸振动」。
+- **v1.7.1**：手机端直连配对新增扫码：点「扫码」用手机相机扫描盒子屏幕上的二维码，
+  自动带出 IP 与配对码并完成配对；蓝牙模式新增「扫描附近蓝牙设备」，由手机主动发现盒子、
+  发起系统配对，配对成功后自动连接。盒端每次构建分两个安装包：正常版 `TVRemoteServer.apk`
+  （Android 8.0+）与低版本版 `TVRemoteServer-android5.apk`（Android 5.1），应用内更新按系统版本选择。
 - **v1.7.0**：手机端 App 与盒端网页遥控页的按键加入短震动反馈：方向键、OK、
   返回/主页/菜单/电源、音量/静音，以及飞鼠开关、应用图标与文字发送按钮；
   长按 OK 只在按下时震动一次。不支持振动 API 的浏览器（如 iOS Safari）静默跳过，
@@ -467,6 +499,8 @@ aapt2 → javac → d8 → 打包 dex → zipalign → apksigner。
 - **任何商业使用（企业内部、SaaS、二次售卖）**：禁止直接使用，需联系作者获取单独商业授权（mst8222@163.com）。
 
 分发或修改后的作品必须保留本许可与版权声明。
+
+手机端内置 [ZXing core](https://github.com/zxing/zxing)（Apache-2.0）用于二维码识别。
 
 ---
 

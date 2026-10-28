@@ -43,13 +43,15 @@ import javax.net.ssl.SSLServerSocketFactory;
 
 /**
  * 盒子端的遥控服务：监听 TCP 8899，收到命令后经无障碍服务注入。
- * 不需要 root / 开发者选项 / 无线调试，开机自启（SPEC-014）。
+ * 不需要 root；默认用无障碍注入（SPEC-014），可切换 ADB 注入模式（SPEC-039，
+ * 需要用户在开发者选项里打开一次调试开关）。
+ * 开机自启（SPEC-010）。
  *
  * 协议（每行一条，\n 结尾）：
  *   PAIR <6位配对码>          -> OK <token>
- *   KEY <token> <keycode>     -> OK | ERR a11y | ERR cmd | ERR exec
- *   KEYLONG <token> <keycode> -> OK | ERR a11y | ERR cmd | ERR exec（SPEC-018，仅 23）
- *   TEXT <token> <base64>     -> OK | ERR a11y | ERR exec
+ *   KEY <token> <keycode>     -> OK | ERR a11y | ERR adb | ERR cmd | ERR exec
+ *   KEYLONG <token> <keycode> -> OK | ERR a11y | ERR adb | ERR cmd | ERR exec（SPEC-018，仅 23）
+ *   TEXT <token> <base64>     -> OK | ERR a11y | ERR adb | ERR exec
  *   APP <token> <包名>         -> OK | ERR exec
  *   LIST <token>              -> OK <包名|base64(应用名),逗号分隔>
  *   ICON <token> <包名>        -> OK <base64(PNG)> | ERR arg | ERR exec（SPEC-019）
@@ -58,11 +60,14 @@ import javax.net.ssl.SSLServerSocketFactory;
  *   MTAP <token>              -> OK | ERR a11y | ERR exec（SPEC-023 光标处单击）
  *   MLONG <token>             -> OK | ERR a11y | ERR exec（SPEC-023 光标处长按）
  *   SCROLL <token> <steps>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-023，-5..5）
- *   MTAPN <token> <x> <y>     -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028，0..10000）
- *   MLONGN <token> <x> <y>    -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028）
+ *   MTAPN <token> <x> <y>     -> OK | ERR arg | ERR a11y | ERR adb | ERR exec（SPEC-028/039）
+ *   MLONGN <token> <x> <y>    -> OK | ERR arg | ERR a11y | ERR adb | ERR exec（SPEC-028/039）
  *   MSWIPEN <token> <x1> <y1> <x2> <y2> <ms>
- *                             -> OK | ERR arg | ERR a11y | ERR exec（SPEC-028，ms 50..1500）
+ *                             -> OK | ERR arg | ERR a11y | ERR adb | ERR exec（SPEC-028/039）
  *   PING                      -> PONG
+ *
+ * SPEC-039：盒端可切换「ADB 注入模式」，KEY/KEYLONG/TEXT/绝对触摸改由 shell 的
+ * input 命令注入真实事件（等同蓝牙 HID）；ADB 不可用时返回 ERR adb。
  */
 public class ServerService extends Service {
 
@@ -117,6 +122,7 @@ public class ServerService extends Service {
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         try { if (udp != null) udp.close(); } catch (Exception ignored) {}
         if (web != null) web.stop();
+        AdbShell.reset();
         TvRemoteAccessibilityService.hideAirCursor();
         super.onDestroy();
     }
@@ -310,6 +316,8 @@ public class ServerService extends Service {
                     } catch (NumberFormatException e) {
                         return "ERR arg";
                     }
+                    // SPEC-039：ADB 模式下注入真实按键事件（等同蓝牙 HID）
+                    if (AdbShell.enabled(this)) return adbResult(AdbShell.key(this, code));
                     switch (TvRemoteAccessibilityService.key(this, code)) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
@@ -325,6 +333,11 @@ public class ServerService extends Service {
                         code = Integer.parseInt(p[2].trim());
                     } catch (NumberFormatException e) {
                         return "ERR arg";
+                    }
+                    if (AdbShell.enabled(this)) {
+                        // --longpress 不可用的固件退回无障碍长按
+                        int r = AdbShell.keyLong(this, code);
+                        if (r != AdbShell.RES_FAIL) return adbResult(r);
                     }
                     switch (TvRemoteAccessibilityService.keyLong(this, code)) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
@@ -409,6 +422,7 @@ public class ServerService extends Service {
                     // SPEC-028：绝对点按，归一化坐标 0..10000
                     int[] v = normPoint(p);
                     if (v == null) return "ERR arg";
+                    if (AdbShell.enabled(this)) return adbResult(AdbShell.tap(this, v[0], v[1]));
                     switch (TvRemoteAccessibilityService.touchTap(v[0], v[1])) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
@@ -419,6 +433,7 @@ public class ServerService extends Service {
                     // SPEC-028：绝对长按，归一化坐标 0..10000
                     int[] v = normPoint(p);
                     if (v == null) return "ERR arg";
+                    if (AdbShell.enabled(this)) return adbResult(AdbShell.longPress(this, v[0], v[1]));
                     switch (TvRemoteAccessibilityService.touchLong(v[0], v[1])) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
@@ -440,6 +455,10 @@ public class ServerService extends Service {
                         if (a[i] < 0 || a[i] > 10000) return "ERR arg";
                     }
                     if (a[4] < 50 || a[4] > 1500) return "ERR arg";
+                    if (AdbShell.enabled(this)) {
+                        return adbResult(AdbShell.swipe(
+                                this, a[0], a[1], a[2], a[3], a[4]));
+                    }
                     switch (TvRemoteAccessibilityService.touchSwipe(
                             a[0], a[1], a[2], a[3], a[4])) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
@@ -452,6 +471,11 @@ public class ServerService extends Service {
                     if (p[2].length() > MAX_TEXT_B64) return "ERR toolong";
                     String txt = new String(Base64.decode(p[2], Base64.NO_WRAP), "UTF-8");
                     if (txt.codePointCount(0, txt.length()) > MAX_TEXT_CHARS) return "ERR toolong";
+                    if (AdbShell.enabled(this)) {
+                        // SPEC-039：ASCII 走 input text；中文等退回无障碍 ACTION_SET_TEXT
+                        int r = AdbShell.text(this, txt);
+                        if (r != AdbShell.RES_FAIL) return adbResult(r);
+                    }
                     switch (TvRemoteAccessibilityService.text(txt)) {
                         case TvRemoteAccessibilityService.RES_OK: return "OK";
                         case TvRemoteAccessibilityService.RES_NO_A11Y: return "ERR a11y";
@@ -478,6 +502,17 @@ public class ServerService extends Service {
             }
         } catch (Exception e) {
             return "ERR " + e.getClass().getSimpleName();
+        }
+    }
+
+    // ---------------- SPEC-039 ADB 注入结果映射 ----------------
+
+    /** AdbShell 结果转协议返回：不可用明确报 ERR adb，不退化成无障碍 */
+    private static String adbResult(int r) {
+        switch (r) {
+            case AdbShell.RES_OK: return "OK";
+            case AdbShell.RES_NO_ADB: return "ERR adb";
+            default: return "ERR exec";
         }
     }
 

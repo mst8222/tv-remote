@@ -4,7 +4,9 @@
 手动编译 Android APK（不需要 Gradle）
 流程：aapt2 link → javac → d8 → 打包 dex → zipalign → apksigner
 """
+import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +18,15 @@ if hasattr(sys.stdout, "reconfigure"):
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODULE = sys.argv[1] if len(sys.argv) > 1 else "app"
 APP = os.path.join(HERE, MODULE)
-OUT_NAMES = {"app": "TVRemote.apk", "server": "TVRemoteServer.apk"}
+# SPEC-038：盒端每次构建产出正常版（API 26）与低版本版（API 22）；手机端仍只出 API 26
+OUTPUTS = {
+    "app": [("TVRemote.apk", 26)],
+    "server": [("TVRemoteServer.apk", 26), ("TVRemoteServer-android5.apk", 22)],
+}
+VARIANTS = OUTPUTS.get(MODULE, [(MODULE + ".apk", 26)])
+# SPEC-036：手机端内置 ZXing core 用于扫码，编译与 dex 都要带上这些 jar
+LIBS = sorted(glob.glob(os.path.join(APP, "libs", "*.jar")))
+
 SDK = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk")
 BT = os.path.join(SDK, "build-tools", "36.1.0")
 ANDROID_JAR = os.path.join(SDK, "platforms", "android-35", "android.jar")
@@ -26,11 +36,11 @@ ZIPALIGN = os.path.join(BT, "zipalign.exe")
 APKSIGNER = os.path.join(BT, "apksigner.bat")
 KEYSTORE = os.path.join(HERE, "keys", "release.jks")
 KS_PASS = "koco123456"
-OUT = os.path.join(HERE, "dist", OUT_NAMES.get(MODULE, MODULE + ".apk"))
+DIST = os.path.join(HERE, "dist")
 WEB_DIR = os.path.join(APP, "assets", "web")
 WEB_CERT = os.path.join(HERE, "keys", "web.p12")
 WEB_PASS = "koco123456"
-os.makedirs(os.path.dirname(OUT), exist_ok=True)
+os.makedirs(DIST, exist_ok=True)
 
 
 def run(cmd, **kw):
@@ -83,7 +93,27 @@ def web_assets_dir():
     return os.path.join(APP, "assets")
 
 
-def link_resources(extra):
+def manifest_for(min_sdk):
+    """按变体返回清单路径：minSdk 与清单一致时用原清单，否则复制并替换后再交给 aapt2。
+
+    aapt2 的 --min-sdk-version 只在清单没有 uses-sdk 时生效，所以双版本必须写临时清单。
+    """
+    src = os.path.join(APP, "AndroidManifest.xml")
+    with open(src, encoding="utf-8") as f:
+        txt = f.read()
+    m = re.search(r'android:minSdkVersion="(\d+)"', txt)
+    if not m or int(m.group(1)) == min_sdk:
+        return src
+    builddir = os.path.join(HERE, ".build")
+    os.makedirs(builddir, exist_ok=True)
+    dst = os.path.join(builddir, "AndroidManifest-%d.xml" % min_sdk)
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(re.sub(r'android:minSdkVersion="\d+"',
+                       'android:minSdkVersion="%d"' % min_sdk, txt))
+    return dst
+
+
+def link_resources(extra, min_sdk):
     base = os.path.join(HERE, "base.apk")
     if os.path.exists(base):
         os.remove(base)
@@ -92,14 +122,14 @@ def link_resources(extra):
     os.makedirs(gendir, exist_ok=True)
     assets = web_assets_dir()
     cmd = [AAPT2, "link", "-o", base, "-I", ANDROID_JAR,
-           "--manifest", os.path.join(APP, "AndroidManifest.xml"),
+           "--manifest", manifest_for(min_sdk),
            "--java", gendir,
-           "--min-sdk-version", "26", "--target-sdk-version", "30",
-           "--version-code", "13", "--version-name", "1.6.9"]
+           "--min-sdk-version", str(min_sdk), "--target-sdk-version", "30",
+           "--version-code", "16", "--version-name", "1.7.2"]
     if assets:
         cmd += ["-A", assets]
     run(cmd + extra)
-    print("[2/7] 资源与清单已链接")
+    print("[2/7] 资源与清单已链接 (minSdk %d)" % min_sdk)
     return base
 
 
@@ -120,13 +150,14 @@ def compile_java():
                 srcs.append(os.path.join(root, f))
     stub = os.path.join(BT, "core-lambda-stubs.jar")
     bootcp = ANDROID_JAR + ";" + stub if os.path.exists(stub) else ANDROID_JAR
+    cp = ";".join([ANDROID_JAR] + LIBS)
     run(["javac", "-encoding", "UTF-8", "-source", "8", "-target", "8",
-         "-bootclasspath", bootcp, "-classpath", ANDROID_JAR,
+         "-bootclasspath", bootcp, "-classpath", cp,
          "-nowarn", "-d", cls] + srcs)
     print(f"[3/7] javac 编译完成 ({len(srcs)} 个源文件)")
 
 
-def dex():
+def dex(min_sdk):
     cls = os.path.join(HERE, "classes")
     dexdir = os.path.join(HERE, "dexout")
     if os.path.exists(dexdir):
@@ -137,7 +168,9 @@ def dex():
         for f in files:
             if f.endswith(".class"):
                 classfiles.append(os.path.join(root, f))
-    run([D8, "--lib", ANDROID_JAR, "--min-api", "26", "--output", dexdir] + classfiles)
+    # 预编译 jar（如 ZXing）不在 classes/ 里，必须直接作为 d8 输入才会打进 APK
+    run([D8, "--lib", ANDROID_JAR, "--min-api", str(min_sdk),
+         "--output", dexdir] + classfiles + LIBS)
     print("[4/7] d8 生成 dex")
 
 
@@ -151,7 +184,7 @@ def pack(base):
     print("[5/7] classes.dex 已打包")
 
 
-def align_sign():
+def align_sign(out_name):
     aligned = os.path.join(HERE, "aligned.apk")
     if os.path.exists(aligned):
         os.remove(aligned)
@@ -164,21 +197,28 @@ def align_sign():
              "-dname", "CN=Koco Remote, OU=Personal, O=Koco, C=CN"])
         print("    已生成签名密钥库")
 
-    if os.path.exists(OUT):
-        os.remove(OUT)
+    out = os.path.join(DIST, out_name)
+    if os.path.exists(out):
+        os.remove(out)
     run([APKSIGNER, "sign", "--ks", KEYSTORE, "--ks-pass", "pass:" + KS_PASS,
          "--key-pass", "pass:" + KS_PASS, "--ks-key-alias", "koco",
-         "--out", OUT, aligned])
+         "--out", out, aligned])
     print("[6/7] zipalign + 签名完成")
+    return out
 
 
-def verify():
-    run([APKSIGNER, "verify", "--print-certs", OUT])
-    r = subprocess.run([os.path.join(BT, "aapt2.exe"), "dump", "badging", OUT],
+def verify(out, min_sdk):
+    run([APKSIGNER, "verify", "--print-certs", out])
+    r = subprocess.run([os.path.join(BT, "aapt2.exe"), "dump", "badging", out],
                        capture_output=True, text=True, encoding="utf-8", errors="ignore")
-    for line in (r.stdout or "").splitlines()[:3]:
-        print("   ", line)
-    print(f"[7/7] 产物: {OUT}  {os.path.getsize(OUT)/1024:.0f} KB")
+    line = ""
+    for l in (r.stdout or "").splitlines():
+        if l.startswith("package:") or l.startswith("minSdkVersion:"):
+            print("   ", l)
+            line += l
+    if "minSdkVersion:'%d'" % min_sdk not in line:
+        raise SystemExit("[x] %s 的 minSdk 不是 %d" % (out, min_sdk))
+    print(f"[7/7] 产物: {out}  {os.path.getsize(out)/1024:.0f} KB")
 
 
 if __name__ == "__main__":
@@ -187,9 +227,12 @@ if __name__ == "__main__":
         if not os.path.exists(p):
             print(f"[x] 缺少 {n}: {p}")
             sys.exit(1)
-    base = link_resources(compile_resources())
-    compile_java()
-    dex()
-    pack(base)
-    align_sign()
-    verify()
+    res = compile_resources()
+    for out_name, min_sdk in VARIANTS:
+        print(f"===== {out_name} (minSdk {min_sdk}) =====")
+        base = link_resources(res, min_sdk)
+        compile_java()
+        dex(min_sdk)
+        pack(base)
+        out = align_sign(out_name)
+        verify(out, min_sdk)

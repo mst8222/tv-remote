@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.Settings;
 import android.widget.Toast;
 
@@ -41,7 +42,9 @@ final class Updater {
             "https://api.github.com/repos/mst8222/tv-remote/releases/assets/";
     /** Gitee 镜像仓库：与 GitHub 公开快照同内容，Release 同步发布 */
     private static final String GITEE_API = "https://gitee.com/api/v5/repos/moston/tv-remote/releases";
-    private static final String APK_NAME = "TVRemoteServer.apk";
+    /** SPEC-038：API 22~25 只能装低版本版；API 26+ 用正常版 */
+    private static final String APK_NAME = Build.VERSION.SDK_INT < 26
+            ? "TVRemoteServer-android5.apk" : "TVRemoteServer.apk";
     private static final int TIMEOUT_MS = 15000;
 
     /** 单个下载源：Gitee 为直链，GitHub 走资产 API */
@@ -315,7 +318,9 @@ final class Updater {
      * @return true 表示已提交安装会话；false 表示被权限拦截或提交失败
      */
     static boolean install(Activity a, File apk) {
-        if (!a.getPackageManager().canRequestPackageInstalls()) {
+        // SPEC-035：canRequestPackageInstalls 是 API 26 才有的检查，
+        // Android 5.1 由系统安装界面自行询问「未知来源」，这里直接提交会话
+        if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
             Toast.makeText(a, R.string.update_perm_required, Toast.LENGTH_LONG).show();
             try {
                 Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,

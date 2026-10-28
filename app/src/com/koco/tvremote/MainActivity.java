@@ -1,12 +1,16 @@
 package com.koco.tvremote;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Dialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.os.LocaleList;
@@ -33,6 +37,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -57,6 +62,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 手机端主界面（纯 Java 构建，无 XML layout，SPEC-008 重新设计）。
@@ -92,6 +99,20 @@ public class MainActivity extends Activity {
     private GradientDrawable dotBg;
     private LanClient lan;
     private boolean lanMode = false;
+    // SPEC-036：扫码配对（相机 + ZXing）
+    private static final int RC_CAMERA = 101, RC_BT_SCAN_PERM = 102, RC_BT_ENABLE = 103;
+    private AppQrScanner qrScanner;
+    private Sheet qrScanSheet;
+    private boolean pendingQrScan = false;
+    // SPEC-037：蓝牙主动发现与配对
+    private BluetoothAdapter btAdapter;
+    private BroadcastReceiver btScanReceiver;
+    private Sheet btScanSheet;
+    private LinearLayout btScanList;
+    private TextView btScanStatus;
+    private final List<String> btScanAddrs = new ArrayList<>();
+    private BluetoothDevice pendingBond;
+    private boolean pendingBtScan = false;
     // SPEC-018：飞鼠（仅蓝牙 HID），陀螺仪角速度换算为鼠标相对位移
     private boolean airMouse = false;
     private SensorManager sensorManager;
@@ -223,6 +244,8 @@ public class MainActivity extends Activity {
         }
         // 直连会话在 onPause 已关闭，回前台重新建立
         if (inputTouchpad && lanMode && touchSession == null) startTouchpad();
+        // SPEC-036：扫码弹窗仍在时恢复取景
+        if (qrScanSheet != null && qrScanner != null) qrScanner.start();
     }
 
     @Override
@@ -230,9 +253,41 @@ public class MainActivity extends Activity {
         super.onPause();
         // SPEC-023：离开界面立即释放按压并关闭直连会话，避免光标/触摸卡住
         stopTouchpad();
+        // SPEC-036：退到后台释放相机
+        if (qrScanner != null) qrScanner.stop();
     }
 
     private String curHost() { return devices.get(cur)[1]; }
+
+    /**
+     * SPEC-036/037：相机与蓝牙发现（定位）权限结果。
+     * 只处理本次主动发起的请求，避免其他来源的授权回调误触发。
+     */
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        if (code == RC_CAMERA && pendingQrScan) {
+            pendingQrScan = false;
+            if (granted) openQrScan();
+            else setStatus(getString(R.string.camera_denied), false);
+        } else if (code == RC_BT_SCAN_PERM && pendingBtScan) {
+            pendingBtScan = false;
+            if (granted) beginBtDiscovery();
+            else setStatus(getString(R.string.bt_perm_location), false);
+        }
+    }
+
+    /** SPEC-037：系统蓝牙开启请求返回后继续扫描 */
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == RC_BT_ENABLE && pendingBtScan) {
+            pendingBtScan = false;
+            if (btAdapter != null && btAdapter.isEnabled()) startBtDiscovery();
+            else setStatus(getString(R.string.bt_enable_first), false);
+        }
+    }
 
     // ---------------- 设备持久化 ----------------
 
@@ -1766,6 +1821,7 @@ public class MainActivity extends Activity {
         new Sheet(getString(R.string.add_title), null)
                 .field(name)
                 .field(addr)
+                .action(getString(R.string.add_scan), false, ACCENT, this::showQrScan)
                 .action(getString(R.string.cancel), false, SUB)
                 .action(getString(R.string.add_positive), true, SUB, () -> {
                     String h = addr.getText().toString().trim();
@@ -1815,10 +1871,83 @@ public class MainActivity extends Activity {
                 .field(ip)
                 .field(code)
                 .action(getString(R.string.lan_discover), false, SUB, () -> doDiscover())
+                // SPEC-036：二维码通常由盒子端界面直接显示，扫码比手输更快
+                .action(getString(R.string.lan_scan), false, ACCENT, this::showQrScan)
                 .action(getString(R.string.cancel), false, SUB)
                 .action(getString(R.string.lan_pair), true, SUB, () ->
                         doPair(ip.getText().toString().trim(), code.getText().toString().trim()))
                 .show();
+    }
+
+    // ---------------- 扫码配对（SPEC-036） ----------------
+
+    /** 无相机权限时先申请，授权后由 onRequestPermissionsResult 继续 */
+    private void showQrScan() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingQrScan = true;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, RC_CAMERA);
+            return;
+        }
+        openQrScan();
+    }
+
+    /** 扫码弹窗：相机取景 + 状态行；识别到配对码即关闭并配对 */
+    private void openQrScan() {
+        if (qrScanSheet != null) return;
+        final Sheet sheet = new Sheet(getString(R.string.qr_title), getString(R.string.qr_hint));
+        final TextureView preview = new TextureView(this);
+        sheet.body().addView(preview, lp(-1, dp(300), 0, 0, 0, dp(10)));
+
+        final TextView msg = new TextView(this);
+        msg.setTextColor(SUB);
+        msg.setTextSize(12);
+        msg.setLineSpacing(dp(3), 1f);
+        sheet.body().addView(msg, lp(-1, -2, 0, 0, 0, dp(4)));
+        sheet.action(getString(R.string.cancel), false, SUB);
+
+        AppQrScanner.Listener listener = new AppQrScanner.Listener() {
+            @Override
+            public void onResult(String text) {
+                if (qrScanSheet == null) return;
+                String[] p = parsePairQr(text);
+                if (p == null) {
+                    msg.setText(getString(R.string.qr_invalid));
+                    return;
+                }
+                dismissQrScan();
+                focusDevice(p[0]);
+                doPair(p[0], p[1]);
+            }
+
+            @Override
+            public void onError(String reason) {
+                msg.setText(getString(R.string.camera_unavailable));
+            }
+        };
+
+        qrScanner = new AppQrScanner(this, preview, listener);
+        sheet.onDismiss(() -> {
+            if (qrScanner != null) qrScanner.stop();
+            qrScanner = null;
+            qrScanSheet = null;
+        });
+        qrScanSheet = sheet;
+        sheet.show();
+        preview.post(() -> {
+            if (qrScanner != null) qrScanner.start();
+        });
+    }
+
+    private void dismissQrScan() {
+        if (qrScanSheet != null) qrScanSheet.dismiss();
+    }
+
+    /** 盒子二维码为 http://<IP>:17880/#pair=<6 位码>；解析失败返回 null */
+    private static String[] parsePairQr(String text) {
+        if (text == null) return null;
+        Matcher m = Pattern.compile("^https?://([^/:]+)(?::\\d+)?/?[^#\\s]*#pair=(\\d{6})\\s*$")
+                .matcher(text.trim());
+        return m.find() ? new String[]{m.group(1), m.group(2)} : null;
     }
 
     private void doPair(final String h, final String c) {
@@ -2045,14 +2174,12 @@ public class MainActivity extends Activity {
         Set<BluetoothDevice> bonded = bt != null ? bt.bondedDevices() : null;
         if (bonded == null || bonded.isEmpty()) {
             setStatus(getString(R.string.bt_none_found), false);
+            // SPEC-037：未配对设备可直接由手机扫描并发起配对
             new Sheet(getString(R.string.bt_none_title), getString(R.string.bt_none_msg))
+                    .action(getString(R.string.bt_scan_action), true, SUB, this::startBtDiscovery)
                     .action(getString(R.string.bt_discoverable), false, ACCENT,
                             this::requestDiscoverable)
-                    .action(getString(R.string.bt_open_settings), true, SUB, () -> {
-                        try {
-                            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
-                        } catch (Exception ignored) {}
-                    })
+                    .action(getString(R.string.cancel), false, SUB)
                     .show();
             return;
         }
@@ -2069,7 +2196,192 @@ public class MainActivity extends Activity {
                 setStatus(getString(R.string.bt_connecting, n == null ? d.getAddress() : n), true);
             });
         }
-        sheet.action(getString(R.string.cancel), false, SUB).show();
+        sheet.action(getString(R.string.bt_scan_action), false, ACCENT,
+                        this::startBtDiscovery)
+                .action(getString(R.string.cancel), false, SUB).show();
+    }
+
+    // ---------------- 蓝牙主动扫描与配对（SPEC-037） ----------------
+
+    /** 扫描入口：依次检查蓝牙开关、定位权限，再开始发现 */
+    private void startBtDiscovery() {
+        if (btScanReceiver != null) return;
+        btAdapter = BluetoothAdapter.getDefaultAdapter();
+        if (btAdapter == null) {
+            setStatus(getString(R.string.bt_not_supported), false);
+            return;
+        }
+        if (!btAdapter.isEnabled()) {
+            pendingBtScan = true;
+            try {
+                startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                        RC_BT_ENABLE);
+            } catch (Exception e) {
+                pendingBtScan = false;
+                setStatus(getString(R.string.bt_enable_first), false);
+            }
+            return;
+        }
+        // 旧蓝牙权限模型（targetSdk 30）发现设备必须持有定位权限
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingBtScan = true;
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                    RC_BT_SCAN_PERM);
+            return;
+        }
+        beginBtDiscovery();
+    }
+
+    /** 扫描弹窗：状态行 + 设备列表；点击未配对设备发起系统配对 */
+    private void beginBtDiscovery() {
+        if (btScanReceiver != null) return;
+        if (btAdapter == null || !btAdapter.isEnabled()) {
+            setStatus(getString(R.string.bt_enable_first), false);
+            return;
+        }
+        btScanAddrs.clear();
+        pendingBond = null;
+
+        btScanReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                String action = i.getAction();
+                if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+                    BluetoothDevice d = i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    if (d != null) addBtScanRow(d);
+                } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+                    if (btScanStatus != null && btScanAddrs.isEmpty()) {
+                        btScanStatus.setText(getString(R.string.bt_scan_none));
+                    }
+                } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
+                    onBondStateChanged((BluetoothDevice) i
+                            .getParcelableExtra(BluetoothDevice.EXTRA_DEVICE));
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_FOUND);
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        registerReceiver(btScanReceiver, filter);
+
+        Sheet sheet = new Sheet(getString(R.string.bt_scan_title), getString(R.string.bt_scan_tip));
+        btScanStatus = new TextView(this);
+        btScanStatus.setText(getString(R.string.bt_scanning));
+        btScanStatus.setTextColor(SUB);
+        btScanStatus.setTextSize(13);
+        btScanStatus.setLineSpacing(dp(3), 1f);
+        sheet.body().addView(btScanStatus, lp(-1, -2, 0, dp(2), 0, dp(10)));
+
+        btScanList = new LinearLayout(this);
+        btScanList.setOrientation(LinearLayout.VERTICAL);
+        ScrollView sc = new ScrollView(this);
+        sc.addView(btScanList);
+        sheet.body().addView(sc, lp(-1, dp(240), 0, 0, 0, 0));
+        sheet.action(getString(R.string.cancel), false, SUB);
+        sheet.onDismiss(this::endBtDiscovery);
+        btScanSheet = sheet;
+        sheet.show();
+        if (!btAdapter.startDiscovery()) {
+            btScanStatus.setText(getString(R.string.bt_scan_none));
+        }
+    }
+
+    /** 追加一条扫描结果；同一地址只显示一次 */
+    private void addBtScanRow(BluetoothDevice d) {
+        if (btScanList == null) return;
+        final String addr = d.getAddress();
+        if (btScanAddrs.contains(addr)) return;
+        btScanAddrs.add(addr);
+        String name = null;
+        try { name = d.getName(); } catch (Exception ignored) {}
+        final String label = (name == null || name.trim().isEmpty()) ? addr : name;
+        boolean bonded = d.getBondState() == BluetoothDevice.BOND_BONDED;
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setBackground(ripple(DIM, 14, 0));
+        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        TextView n = new TextView(this);
+        n.setText(label);
+        n.setTextColor(TXT);
+        n.setTextSize(15);
+        row.addView(n);
+        TextView sub = new TextView(this);
+        sub.setText(addr + "  ·  "
+                + getString(bonded ? R.string.bt_bonded_tag : R.string.bt_unbonded_tag));
+        sub.setTextColor(SUB);
+        sub.setTextSize(12);
+        row.addView(sub, lp(-2, -2, 0, dp(3), 0, 0));
+        row.setOnClickListener(v -> onBtScanRowClick(d, label));
+        btScanList.addView(row, lp(-1, -2, 0, 0, 0, dp(8)));
+    }
+
+    private void onBtScanRowClick(BluetoothDevice d, String label) {
+        if (btAdapter != null && btAdapter.isDiscovering()) {
+            try { btAdapter.cancelDiscovery(); } catch (Exception ignored) {}
+        }
+        if (d.getBondState() == BluetoothDevice.BOND_BONDED) {
+            if (bt == null) return;
+            saveBtAddr(curHost(), d.getAddress());
+            bt.connect(d);
+            setStatus(getString(R.string.bt_connecting, label), true);
+            dismissBtScan();
+            return;
+        }
+        // 未配对：由手机发起系统配对，配对成功后自动连接
+        pendingBond = d;
+        if (btScanStatus != null) btScanStatus.setText(getString(R.string.bt_bonding, label));
+        try {
+            if (!d.createBond()) {
+                pendingBond = null;
+                if (btScanStatus != null) btScanStatus.setText(getString(R.string.bt_bond_fail));
+            }
+        } catch (Exception e) {
+            pendingBond = null;
+            if (btScanStatus != null) btScanStatus.setText(getString(R.string.bt_bond_fail));
+        }
+    }
+
+    /** 只处理本机发起的配对目标；成功后记录目标并连接 */
+    private void onBondStateChanged(BluetoothDevice d) {
+        if (d == null || pendingBond == null
+                || !d.getAddress().equals(pendingBond.getAddress())) return;
+        int state = d.getBondState();
+        if (state == BluetoothDevice.BOND_BONDED) {
+            pendingBond = null;
+            if (bt != null) {
+                saveBtAddr(curHost(), d.getAddress());
+                bt.connect(d);
+            }
+            String name = d.getName();
+            setStatus(getString(R.string.bt_connecting, name == null ? d.getAddress() : name), true);
+            dismissBtScan();
+        } else if (state == BluetoothDevice.BOND_NONE) {
+            pendingBond = null;
+            if (btScanStatus != null) btScanStatus.setText(getString(R.string.bt_bond_fail));
+        }
+    }
+
+    private void dismissBtScan() {
+        if (btScanSheet != null) btScanSheet.dismiss();
+    }
+
+    /** 停止发现、反注册接收器并清空扫描弹窗状态 */
+    private void endBtDiscovery() {
+        if (btScanReceiver != null) {
+            try { unregisterReceiver(btScanReceiver); } catch (Exception ignored) {}
+            btScanReceiver = null;
+        }
+        if (btAdapter != null && btAdapter.isDiscovering()) {
+            try { btAdapter.cancelDiscovery(); } catch (Exception ignored) {}
+        }
+        btScanList = null;
+        btScanStatus = null;
+        btScanSheet = null;
+        pendingBond = null;
+        btScanAddrs.clear();
     }
 
     /** SPEC-005 FR-5-9：让盒子能搜到本机，以 HID 设备身份完成配对 */
@@ -2156,6 +2468,13 @@ public class MainActivity extends Activity {
         super.onDestroy();
         stopTouchpad(); // SPEC-023：退出时释放按压并关闭直连会话
         stopAirMouse(); // SPEC-018：退出界面停止陀螺仪并释放鼠标按键
+        // SPEC-036：释放相机
+        if (qrScanner != null) {
+            qrScanner.stop();
+            qrScanner = null;
+        }
+        // SPEC-037：停止蓝牙扫描并反注册接收器
+        endBtDiscovery();
         if (bt != null) bt.stop();
         worker.shutdownNow();
     }

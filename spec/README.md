@@ -108,5 +108,10 @@ spec/
 | SPEC-032 | 无障碍根节点为空时的 OK 键回退 | developing |
 | SPEC-033 | 盒端界面宽屏双栏与二维码前置 | developing |
 | SPEC-034 | 遥控按键震动反馈 | developing |
+| SPEC-035 | 盒端 App 支持 Android 5.1（API 22） | implemented |
+| SPEC-036 | 手机端扫码配对直连盒子 | developing |
+| SPEC-037 | 手机端蓝牙扫描与主动配对 | developing |
+| SPEC-038 | 盒端双版本构建（API 26 / API 22） | developing |
+| SPEC-039 | 盒端 ADB 自连注入（shell 权限真实按键） | developing |
 
 > 新增/修改 spec 后必须同步维护此索引表。
