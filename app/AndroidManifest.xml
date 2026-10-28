@@ -1,17 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.koco.tvremote"
-    android:versionCode="14"
-    android:versionName="1.7.0">
+    android:versionCode="16"
+    android:versionName="1.7.2">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <!-- SPEC-037：扫描附近蓝牙设备（旧蓝牙权限模型下发现设备需要定位权限） -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- SPEC-036：扫描盒端二维码配对 -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <!-- SPEC-017：应用内升级需要发起安装会话 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- SPEC-034：按键震动反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="30" />
 

@@ -98,12 +98,34 @@
     <string name="bt_web_addr_unknown">地址请到盒子端「TV遥控服务」界面查看</string>
     <string name="ok_got_it">知道了</string>
     <string name="bt_none_title">还没有配对设备</string>
-    <string name="bt_none_msg">盒子端要主动搜索这台手机并配对：\n\n1. 点下面「让盒子搜索这台手机」\n2. 在盒子的「设置 → 蓝牙」里选择这台手机\n3. 两边确认配对码后回来点「蓝牙」</string>
+    <string name="bt_none_msg">可以直接由手机扫描配对：\n\n1. 点下面「扫描附近蓝牙设备」\n2. 在盒子的「设置 → 蓝牙」中保持蓝牙可被发现，选中本机\n3. 两边确认配对码后自动连接\n\n如果盒子搜不到本机，也可以点「让盒子搜索这台手机」。</string>
     <string name="bt_open_settings">去蓝牙设置</string>
     <string name="bt_pick_title">选择已配对的盒子</string>
     <string name="bt_none_found">没有已配对的蓝牙设备</string>
     <string name="bt_device">设备</string>
     <string name="scan_none_msg">可能原因：\n· 盒子端「TV遥控服务」没有运行\n· 手机和盒子不在同一 WiFi\n· 路由器开启了 AP 隔离\n\n也可以点「添加」手动填盒子 IP。</string>
+
+    <!-- SPEC-036 扫码配对 -->
+    <string name="lan_scan">扫码</string>
+    <string name="add_scan">扫码添加</string>
+    <string name="qr_title">扫描盒子二维码</string>
+    <string name="qr_hint">把电视上的二维码放入取景框，自动识别 IP 与配对码</string>
+    <string name="qr_invalid">这不是盒子配对码，请对准盒子端界面上的二维码</string>
+    <string name="camera_denied">未获得相机权限：请在系统设置中允许相机，或手动输入 IP 与配对码</string>
+    <string name="camera_unavailable">无法打开相机：请确认相机未被其他应用占用后重试</string>
+
+    <!-- SPEC-037 蓝牙扫描与配对 -->
+    <string name="bt_scan_action">扫描附近蓝牙设备</string>
+    <string name="bt_scan_title">扫描蓝牙设备</string>
+    <string name="bt_scan_tip">先在盒子的「设置 → 蓝牙」中打开蓝牙并停留在该页面；部分盒子需进入配对模式才能被搜索到</string>
+    <string name="bt_scanning">正在搜索附近设备…</string>
+    <string name="bt_scan_none">没有搜索到设备：确认盒子蓝牙已打开且可被发现后重试</string>
+    <string name="bt_bonded_tag">已配对</string>
+    <string name="bt_unbonded_tag">未配对</string>
+    <string name="bt_bonding">正在配对 %1$s，请在盒子上确认配对码…</string>
+    <string name="bt_bond_fail">配对失败：请确认盒子处于可被发现状态后重试</string>
+    <string name="bt_perm_location">扫描附近蓝牙设备需要位置权限：请在系统设置中允许后重试</string>
+    <string name="bt_enable_first">请先打开手机蓝牙</string>
 
     <!-- 分组卡片标题（SPEC-012） -->
     <string name="grp_remote">遥控器</string>

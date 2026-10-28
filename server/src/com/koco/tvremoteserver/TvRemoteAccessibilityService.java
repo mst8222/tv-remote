@@ -344,6 +344,8 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return RES_OK;
         }
         // 无命中节点时按触摸点合成手势，和手机点屏幕一致
+        // SPEC-035：API 22 没有合成手势，如实返回失败
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchTap(x, y));
         return RES_OK;
     }
@@ -365,6 +367,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             if (node.isFocusable()) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             if (node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) return RES_OK;
         }
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchLongPress(x, y));
         return RES_OK;
     }
@@ -400,6 +403,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
         final float x2 = b[0];
         final float y2 = b[1];
         final long duration = Math.max(50, Math.min(1500, ms));
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchDrag(x1, y1, x2, y2, duration));
         return RES_OK;
     }
@@ -466,6 +470,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             elapsed = Math.max(50, SystemClock.uptimeMillis() - downAt);
         }
         final boolean tap = Math.abs(x - sx) < 3 && Math.abs(y - sy) < 3;
+        if (!canGesture()) return RES_FAIL;
         // 手势统一投递到 UI 线程串行执行，避免与前面投递的拖动分段抢占触摸通道
         ui.post(() -> {
             if (tap) {
@@ -496,6 +501,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             if (node.isFocusable()) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return RES_OK;
         }
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchTap(x, y));
         return RES_OK;
     }
@@ -518,6 +524,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             if (node.isFocusable()) node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             if (node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) return RES_OK;
         }
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchLongPress(x, y));
         return RES_OK;
     }
@@ -547,6 +554,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
             }
             if (ok) return RES_OK;
         }
+        if (!canGesture()) return RES_FAIL;
         ui.post(() -> dispatchScrollSwipe(x, y, steps));
         return RES_OK;
     }
@@ -707,7 +715,16 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
         });
     }
 
+    /**
+     * SPEC-035：合成手势依赖 GestureDescription（API 24）。Android 5.1（API 22）
+     * 上没有该类，所有手势入口必须先判断，避免类解析失败导致崩溃。
+     */
+    private static boolean canGesture() {
+        return Build.VERSION.SDK_INT >= 24;
+    }
+
     private boolean dispatchTap(float x, float y) {
+        if (!canGesture()) return false;
         Path p = new Path();
         p.moveTo(x, y);
         GestureDescription.StrokeDescription stroke =
@@ -717,6 +734,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
     }
 
     private boolean dispatchDrag(float x1, float y1, float x2, float y2, long duration) {
+        if (!canGesture()) return false;
         Path p = new Path();
         p.moveTo(x1, y1);
         p.lineTo(x2, y2);
@@ -728,6 +746,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
 
     /** SPEC-023：合成 600ms 长按 */
     private boolean dispatchLongPress(float x, float y) {
+        if (!canGesture()) return false;
         Path p = new Path();
         p.moveTo(x, y);
         GestureDescription.StrokeDescription stroke =
@@ -738,6 +757,7 @@ public class TvRemoteAccessibilityService extends AccessibilityService {
 
     /** SPEC-023：合成短滑动；正数向上滑（内容下移/向前），负数向下滑 */
     private boolean dispatchScrollSwipe(float x, float y, int steps) {
+        if (!canGesture()) return false;
         float unit = 80 * getResources().getDisplayMetrics().density;
         float dist = Math.min(3, Math.abs(steps)) * unit;
         float dir = steps > 0 ? -1 : 1;

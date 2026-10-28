@@ -11,7 +11,6 @@ import java.net.Socket;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -255,8 +254,7 @@ public class WebServer {
                 if (!post) return Response.text(405, "Method Not Allowed");
                 String text = jsonString(body, "text");
                 if (text == null) return Response.json(200, err("arg"), true);
-                String b64 = Base64.getEncoder().encodeToString(
-                        text.getBytes(StandardCharsets.UTF_8));
+                String b64 = b64Encode(text.getBytes(StandardCharsets.UTF_8));
                 return plain(commands.handle("TEXT " + token + " " + b64, ip));
             }
 
@@ -380,8 +378,7 @@ public class WebServer {
                 String name = p[0];
                 if (p.length > 1) {
                     try {
-                        name = new String(Base64.getDecoder().decode(p[1]),
-                                StandardCharsets.UTF_8);
+                        name = new String(b64Decode(p[1]), StandardCharsets.UTF_8);
                     } catch (Exception ignored) {
                         name = p[0];
                     }
@@ -400,11 +397,57 @@ public class WebServer {
     private Response icon(String resp) {
         if (!resp.startsWith("OK ")) return plain(resp);
         try {
-            byte[] png = Base64.getDecoder().decode(resp.substring(3).trim());
+            byte[] png = b64Decode(resp.substring(3).trim());
             return Response.bytes(200, "image/png", png, true);
         } catch (Exception e) {
             return Response.json(200, err("protocol"), true);
         }
+    }
+
+    // ---------------- Base64（SPEC-035） ----------------
+    // 本类同时被桌面 JVM（tests/protocol）编译运行，又要在 Android 5.1（API 22）上跑：
+    // java.util.Base64 是 API 26+，android.util.Base64 桌面 JVM 没有，故自带一份标准实现，
+    // 输出与 android.util.Base64.NO_WRAP 一致（无换行，带 '=' 补齐）。
+
+    private static final char[] B64_CHARS =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".toCharArray();
+
+    static String b64Encode(byte[] in) {
+        StringBuilder sb = new StringBuilder((in.length + 2) / 3 * 4);
+        for (int i = 0; i < in.length; i += 3) {
+            int b0 = in[i] & 0xff;
+            int b1 = i + 1 < in.length ? in[i + 1] & 0xff : 0;
+            int b2 = i + 2 < in.length ? in[i + 2] & 0xff : 0;
+            sb.append(B64_CHARS[b0 >> 2]);
+            sb.append(B64_CHARS[((b0 & 0x03) << 4) | (b1 >> 4)]);
+            sb.append(i + 1 < in.length ? B64_CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] : '=');
+            sb.append(i + 2 < in.length ? B64_CHARS[b2 & 0x3f] : '=');
+        }
+        return sb.toString();
+    }
+
+    /** 解码；'=' 与空白字符一律跳过，非法字符数量按字节对齐截断 */
+    static byte[] b64Decode(String s) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(s.length() * 3 / 4 + 3);
+        int buf = 0;
+        int bits = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            int v;
+            if (c >= 'A' && c <= 'Z') v = c - 'A';
+            else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+            else if (c >= '0' && c <= '9') v = c - '0' + 52;
+            else if (c == '+') v = 62;
+            else if (c == '/') v = 63;
+            else continue;
+            buf = (buf << 6) | v;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out.write((buf >> bits) & 0xff);
+            }
+        }
+        return out.toByteArray();
     }
 
     // ---------------- HTTP 基础 ----------------
