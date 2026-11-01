@@ -113,5 +113,6 @@ spec/
 | SPEC-037 | 手机端蓝牙扫描与主动配对 | developing |
 | SPEC-038 | 盒端双版本构建（API 26 / API 22） | developing |
 | SPEC-039 | 盒端 ADB 自连注入（shell 权限真实按键） | developing |
+| SPEC-040 | APK 推送安装（文件传输 + 链接下载） | planned |
 
 > 新增/修改 spec 后必须同步维护此索引表。

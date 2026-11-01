@@ -130,6 +130,17 @@
     <string name="grp_remote">Remote</string>
     <string name="grp_input">Input</string>
     <string name="grp_apps">Apps</string>
+    <!-- SPEC-040 APK push install -->
+    <string name="grp_apk">Install APK</string>
+    <string name="apk_pick_file">Choose APK file</string>
+    <string name="apk_url_hint">APK download URL (http/https)</string>
+    <string name="apk_send_url">Send</string>
+    <string name="apk_need_lan">Pair with the box via Direct first</string>
+    <string name="apk_url_sent">Sent, the box is downloading and installing</string>
+    <string name="apk_url_fail">Send failed: %1$s</string>
+    <string name="apk_uploading">Uploading APK…</string>
+    <string name="apk_upload_ok">Upload complete, the box is installing</string>
+    <string name="apk_upload_fail">Upload failed: %1$s</string>
     <string name="volume">Volume</string>
 
     <!-- About and updates (SPEC-017) -->

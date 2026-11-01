@@ -79,6 +79,7 @@ pairing and connection mode.
 | Auto start | Foreground service with a notification, started again on boot/reboot |
 | Bilingual UI | Phone: Chinese / English / follow system; box follows the box system language |
 | In-app update | Both apps query the latest GitHub and Gitee releases, prompt when either is newer, and prefer Gitee for the download |
+| APK push install | Android phone picks a local APK and streams it to the box for install; any phone/browser can send an APK download link and the box installs it automatically after download |
 
 ### App shortcut rules
 
@@ -277,6 +278,8 @@ Network requirements:
 | Volume / Mute | Adjusts box media volume |
 | Text input | Writes into the focused editable field; fails if the current screen has none |
 | App shortcuts | Dynamically lists every launchable third-party app on the box (name + real icon) |
+| Install APK (file) | Android app "Install APK" card picks a local APK, streams it to the box over HTTP, verifies the ZIP magic number, then launches the system installer |
+| Install APK (link) | Android app or web remote enters an APK download link; the box downloads it in the background and launches the system installer automatically; works on iOS / HarmonyOS / any browser |
 | Check for updates | Phone: "About" card; box: "Version update" card. Queries GitHub and Gitee, takes the higher version, downloads from Gitee first and falls back to GitHub; the system installer confirms |
 
 ## Direct protocol
@@ -295,6 +298,7 @@ Touch mode uses `MTAPN` / `MLONGN` / `MSWIPEN` (absolute coordinates).
 | `APP <token> <package>` | `OK` / `ERR exec` | Launch an app; accessibility not required |
 | `LIST <token>` | `OK <package\|base64(label), comma-separated>` | Launchable third-party apps; accessibility not required |
 | `ICON <token> <package>` | `OK <base64(PNG)>` / `ERR arg` | App icon (144x144 PNG); accessibility not required; unknown package returns `ERR arg` |
+| `APKURL <token> <base64(url)>` | `OK` / `ERR auth` / `ERR arg` | Send an APK download link; the box downloads it asynchronously and launches the installer; only http/https schemes allowed |
 | `MOVE <token> <dx> <dy>` | `OK` / `ERR arg` / `ERR a11y` | Move the box cursor relatively; each axis -127..127 |
 | `MCLICK <token> <0\|1>` | `OK` / `ERR arg` / `ERR a11y` | Cursor press / release (0 releases, 1 presses) |
 | `MTAP <token>` | `OK` / `ERR a11y` | Tap at the cursor (node first, gesture fallback) |
@@ -312,8 +316,8 @@ UDP 8898 broadcast payload: `TVREMOTE|8899|<box model>`, sent every 3 seconds fo
 powershell -File tests\protocol\run.ps1
 ```
 
-Automated regression: 196 cases (125 protocol + 55 web API + 16 QR); expected output
-`通过 196，失败 0` (196 passed, 0 failed).
+Automated regression: 250 cases (163 protocol + 71 web API + 16 QR); expected output
+`通过 250，失败 0` (250 passed, 0 failed).
 Port 8898 must be free. If a real box is broadcasting on the LAN, the `discover_no_broadcast_null`
 case can fail due to that real broadcast; this is environment noise.
 
@@ -443,6 +447,12 @@ Known limitations:
 
 ## Versions
 
+- **v1.7.5**: APK push install. The Android app's "Install APK" card lets you pick a local APK
+  and stream it to the box over HTTP; after verifying the ZIP magic number the system installer
+  is launched. You can also enter an APK download link and the box downloads it in the background
+  then installs it automatically. The web remote offers both APK link input and file upload,
+  so iOS / HarmonyOS / any browser can use it. Installation goes through the system PackageInstaller
+  and requires confirmation on the box.
 - **v1.7.2**: fixes the web remote not vibrating when opened from a home-screen icon (PWA):
   vibration now fires on pointer-down instead of the click phase. The box QR card gains a
   three-platform "add to home screen" guide (iOS: Share → Add to Home Screen; HarmonyOS:

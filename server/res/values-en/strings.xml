@@ -47,6 +47,10 @@
     <string name="update_err_size">The downloaded package is incomplete. Please retry</string>
     <string name="update_err_json">Could not parse the update information</string>
 
+    <!-- SPEC-040 APK push install -->
+    <string name="apk_not_apk">The downloaded file is not a valid APK package</string>
+    <string name="apk_download_failed">APK download failed. Check the link or network</string>
+
     <!-- 前台通知 -->
     <string name="ntf_channel">Remote service</string>
     <string name="ntf_title">TV Remote Service</string>

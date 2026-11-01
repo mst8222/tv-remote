@@ -101,6 +101,8 @@ public class MainActivity extends Activity {
     private boolean lanMode = false;
     // SPEC-036：扫码配对（相机 + ZXing）
     private static final int RC_CAMERA = 101, RC_BT_SCAN_PERM = 102, RC_BT_ENABLE = 103;
+    /** SPEC-040：选择本地 APK 文件 */
+    private static final int RC_PICK_APK = 104;
     private AppQrScanner qrScanner;
     private Sheet qrScanSheet;
     private boolean pendingQrScan = false;
@@ -287,6 +289,11 @@ public class MainActivity extends Activity {
             if (btAdapter != null && btAdapter.isEnabled()) startBtDiscovery();
             else setStatus(getString(R.string.bt_enable_first), false);
         }
+        // SPEC-040：选中本地 APK 文件后上传到盒子
+        if (request == RC_PICK_APK && result == RESULT_OK && data != null) {
+            android.net.Uri uri = data.getData();
+            if (uri != null) uploadApk(uri);
+        }
     }
 
     // ---------------- 设备持久化 ----------------
@@ -379,6 +386,8 @@ public class MainActivity extends Activity {
         column.addView(card(R.string.grp_about, buildAbout()), lp(-1, -2, 0, 0, 0, dp(10)));
         // 应用卡按缓存载荷先渲染，随后 ensureApps 异步刷新（SPEC-016 FR-16-6）
         rebuildApps(parseApps(sp.getString("apps_" + curHost(), "")));
+        // SPEC-040：安装 APK 卡（选本地文件 / 填下载链接），放在应用卡之后
+        column.addView(card(R.string.grp_apk, buildApkInstall()), lp(-1, -2, 0, 0, 0, dp(10)));
 
         ScrollView sv = new ScrollView(this);
         sv.setBackgroundColor(BG);
@@ -1076,7 +1085,142 @@ public class MainActivity extends Activity {
         return r;
     }
 
-    // ---------------- 应用快捷动态化（SPEC-016） ----------------
+    // ---------------- SPEC-040 APK 推送安装 ----------------
+
+    /** 安装 APK 卡：选择本地 APK 文件上传 + 填写下载链接 */
+    private View buildApkInstall() {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+
+        // 第一行：选择文件按钮
+        TextView pickBtn = new TextView(this);
+        pickBtn.setText(getString(R.string.apk_pick_file));
+        pickBtn.setTextColor(Color.WHITE);
+        pickBtn.setTextSize(14);
+        pickBtn.setGravity(Gravity.CENTER);
+        pickBtn.setBackground(rippleGrad(999));
+        pickBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
+        pickBtn.setOnClickListener(v -> {
+            haptic();
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/vnd.android.package-archive");
+            startActivityForResult(i, RC_PICK_APK);
+        });
+        wrap.addView(pickBtn, lp(-1, -2, 0, 0, 0, dp(10)));
+
+        // 第二行：APK 链接输入框 + 发送按钮
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+
+        final EditText et = new EditText(this);
+        et.setHint(getString(R.string.apk_url_hint));
+        et.setHintTextColor(SUB);
+        et.setTextColor(TXT);
+        et.setTextSize(14);
+        et.setSingleLine(true);
+        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        et.setBackground(round(SURFACE2, 12, 0));
+        et.setPadding(dp(12), 0, dp(12), 0);
+        et.setLayoutParams(new LinearLayout.LayoutParams(0, dp(keyH), 1f));
+        r.addView(et);
+
+        TextView send = new TextView(this);
+        send.setText(getString(R.string.apk_send_url));
+        send.setTextColor(Color.WHITE);
+        send.setTextSize(14);
+        send.setGravity(Gravity.CENTER);
+        send.setBackground(rippleGrad(999));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(76), dp(keyH));
+        slp.leftMargin = dp(8);
+        send.setLayoutParams(slp);
+        send.setOnClickListener(v -> {
+            String url = et.getText().toString().trim();
+            if (url.isEmpty()) return;
+            haptic();
+            doApkUrl(url);
+        });
+        r.addView(send);
+        wrap.addView(r);
+
+        return wrap;
+    }
+
+    /** SPEC-040：发送 APK 下载链接到盒子 */
+    private void doApkUrl(final String url) {
+        if (lan == null) {
+            setStatus(getString(R.string.apk_need_lan), false);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                lan.installApkUrl(url);
+                runOnUiThread(() -> setStatus(getString(R.string.apk_url_sent), true));
+            } catch (Exception e) {
+                runOnUiThread(() -> setStatus(getString(R.string.apk_url_fail, e.getMessage()), false));
+            }
+        }, "apk-url").start();
+    }
+
+    /** SPEC-040：上传选中的 APK 文件到盒子 */
+    private void uploadApk(android.net.Uri uri) {
+        final String host = curHost();
+        final String tok = tokenOf(host);
+        if (tok.isEmpty()) {
+            setStatus(getString(R.string.apk_need_lan), false);
+            return;
+        }
+        setStatus(getString(R.string.apk_uploading), true);
+        new Thread(() -> {
+            java.net.HttpURLConnection conn = null;
+            try {
+                java.io.InputStream in = getContentResolver().openInputStream(uri);
+                if (in == null) throw new Exception("无法读取文件");
+                java.net.URL url = new java.net.URL("http://" + host + ":17880/api/apk-upload");
+                conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(120000);
+                conn.setRequestProperty("X-Token", tok);
+                conn.setRequestProperty("Content-Type", "application/octet-stream");
+                try (java.io.OutputStream out = conn.getOutputStream()) {
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                in.close();
+                int code = conn.getResponseCode();
+                String body = readAll(conn.getInputStream());
+                if (code == 200 && body.contains("\"ok\":true")) {
+                    runOnUiThread(() -> setStatus(getString(R.string.apk_upload_ok), true));
+                } else {
+                    String err = extractErr(body);
+                    runOnUiThread(() -> setStatus(getString(R.string.apk_upload_fail, err), false));
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> setStatus(getString(R.string.apk_upload_fail, e.getMessage()), false));
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }, "apk-upload").start();
+    }
+
+    private static String readAll(java.io.InputStream in) throws Exception {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+        return bos.toString("UTF-8");
+    }
+
+    private static String extractErr(String body) {
+        int i = body.indexOf("\"err\":\"");
+        if (i < 0) return body;
+        int j = body.indexOf('"', i + 7);
+        return j > i ? body.substring(i + 7, j) : body;
+    }
 
     /** 解析 LIST 载荷为 {应用名, 包名}：每项「包名|base64(应用名)」，
      *  旧缓存的纯包名条目按包名显示，首次刷新后自然被替换 */

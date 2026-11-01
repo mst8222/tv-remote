@@ -59,7 +59,20 @@
       errArg: '参数错误',
       errToolong: '内容过长（最多 256 个字符）',
       errLocked: '配对失败次数过多，请稍后再试',
-      errProtocol: '盒子返回异常'
+      errProtocol: '盒子返回异常',
+      // SPEC-040 APK 推送安装
+      apkTitle: '安装 APK',
+      apkPickFile: '选择 APK 文件',
+      apkUrlLabel: '或填写 APK 下载链接：',
+      apkUrlHint: 'https://...',
+      apkSendUrl: '发送',
+      apkUrlSent: '已发送，盒子正在下载安装',
+      apkUrlFail: '发送失败：%s',
+      apkUploading: '正在上传 APK…',
+      apkUploadOk: '上传完成，盒子正在安装',
+      apkUploadFail: '上传失败：%s',
+      apkNotApk: '文件不是有效的 APK 安装包',
+      apkNeedToken: '请先配对盒子'
     },
     en: {
       pairTitle: 'Connect TV box',
@@ -117,7 +130,20 @@
       errArg: 'Invalid argument',
       errToolong: 'Text too long (up to 256 characters)',
       errLocked: 'Too many failed attempts, try later',
-      errProtocol: 'Unexpected response from the box'
+      errProtocol: 'Unexpected response from the box',
+      // SPEC-040 APK push install
+      apkTitle: 'Install APK',
+      apkPickFile: 'Choose APK file',
+      apkUrlLabel: 'Or enter an APK download URL:',
+      apkUrlHint: 'https://...',
+      apkSendUrl: 'Send',
+      apkUrlSent: 'Sent, the box is downloading and installing',
+      apkUrlFail: 'Send failed: %s',
+      apkUploading: 'Uploading APK…',
+      apkUploadOk: 'Upload complete, the box is installing',
+      apkUploadFail: 'Upload failed: %s',
+      apkNotApk: 'The file is not a valid APK package',
+      apkNeedToken: 'Pair with the box first'
     }
   };
 
@@ -486,6 +512,38 @@
     });
   }
 
+  // SPEC-040：上传本地 APK 文件到盒子（raw body，不走 JSON）
+  function uploadApk(file) {
+    var base = current || location.origin;
+    var tok = tokenOf(base);
+    if (!tok) { toast(t('apkNeedToken')); return; }
+    var msg = $('#apkMsg');
+    msg.textContent = t('apkUploading');
+    msg.className = 'msg';
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 120000);
+    var o = { method: 'POST', headers: { 'X-Token': tok }, body: file, cache: 'no-store' };
+    if (ctrl) o.signal = ctrl.signal;
+    fetch(base + '/api/apk-upload', o).then(function (res) {
+      clearTimeout(timer);
+      return res.json();
+    }).then(function (r) {
+      if (r && r.ok) {
+        msg.textContent = t('apkUploadOk');
+        msg.className = 'msg';
+      } else {
+        var code = r && r.err ? r.err : '';
+        var txt = code === 'notapk' ? t('apkNotApk') : t('apkUploadFail').replace('%s', code);
+        msg.textContent = txt;
+        msg.className = 'msg err';
+      }
+    }).catch(function () {
+      clearTimeout(timer);
+      msg.textContent = t('apkUploadFail').replace('%s', 'network');
+      msg.className = 'msg err';
+    });
+  }
+
   function ping() {
     if (!current) {
       showPair();
@@ -510,6 +568,7 @@
     $('#remoteCard').hidden = true;
     $('#inputCard').hidden = true;
     $('#appsCard').hidden = true;
+    $('#apkCard').hidden = true;
     $('#offlineCard').hidden = true;
     setStatus(t('statusNoToken'));
     updateDevBar();
@@ -520,6 +579,7 @@
     $('#remoteCard').hidden = false;
     $('#inputCard').hidden = false;
     $('#appsCard').hidden = false;
+    $('#apkCard').hidden = false;
     setStatus(t('statusConnected'), 'ok');
     updateDevBar();
   }
@@ -1207,6 +1267,35 @@
     $('#text').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') $('#sendBtn').click();
     });
+
+    // SPEC-040 APK 推送安装
+    $('#apkPickBtn').addEventListener('click', function () { $('#apkFile').click(); });
+    $('#apkFile').addEventListener('change', function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (!f) return;
+      uploadApk(f);
+      e.target.value = '';
+    });
+    $('#apkUrlBtn').addEventListener('click', function () {
+      var url = ($('#apkUrl').value || '').trim();
+      if (!url) return;
+      var msg = $('#apkMsg');
+      msg.textContent = t('apkUploading');
+      msg.className = 'msg';
+      command('/api/apkurl', { url: url }).then(function (ok) {
+        if (ok) {
+          msg.textContent = t('apkUrlSent');
+          $('#apkUrl').value = '';
+        } else {
+          msg.textContent = t('apkUrlFail').replace('%s', '');
+          msg.className = 'msg err';
+        }
+      });
+    });
+    $('#apkUrl').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') $('#apkUrlBtn').click();
+    });
+
     $('#retryBtn').addEventListener('click', ping);
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {

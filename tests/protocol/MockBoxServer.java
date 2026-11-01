@@ -101,6 +101,10 @@ public class MockBoxServer implements AutoCloseable {
     public volatile int lastSwipeY2;
     public volatile int lastSwipeMs;
 
+    // SPEC-040：APKURL 命令记录
+    public volatile String lastApkUrl;
+    public volatile int apkUrlCount;
+
     /** 测试辅助：清空触控板命令记录，避免用例之间互相影响 */
     public void resetTouchRecords() {
         moveCount = 0;
@@ -355,6 +359,23 @@ public class MockBoxServer implements AutoCloseable {
                     if (p.length < 3) return "ERR arg";
                     if (iconBase64 == null || !p[2].trim().equals(iconPkg)) return "ERR arg";
                     return "OK " + iconBase64;
+                case "APKURL": {
+                    // SPEC-040：从下载链接安装 APK，校验 http/https scheme
+                    if (p.length < 3) return "ERR arg";
+                    String url;
+                    try {
+                        url = new String(Base64.getDecoder().decode(p[2].trim()), StandardCharsets.UTF_8);
+                    } catch (Exception e) {
+                        return "ERR arg";
+                    }
+                    String low = url.toLowerCase(java.util.Locale.US);
+                    if (!low.startsWith("http://") && !low.startsWith("https://")) {
+                        return "ERR arg";
+                    }
+                    lastApkUrl = url;
+                    apkUrlCount++;
+                    return "OK";
+                }
                 default:
                     return "ERR cmd";
             }

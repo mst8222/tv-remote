@@ -1,6 +1,5 @@
 package com.koco.tvremoteserver;
 
-import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -311,32 +310,35 @@ final class Updater {
     }
 
     /**
-     * 交给系统安装器（SPEC-017 FR-17-7/8）。
+     * 交给系统安装器（SPEC-017 FR-17-7/8，SPEC-040 扩展为可装任意 APK）。
      * 普通应用没有静默安装权限，commit 后会收到待用户确认的状态，
      * 由 UpdateInstallReceiver 拉起系统安装界面。
      *
+     * SPEC-040：参数由 Activity 放宽为 Context，使 ServerService 也能调起安装；
+     * 去掉 setAppPackageName，让安装器从 APK 自身读取包名，从而支持任意第三方 APK。
+     *
      * @return true 表示已提交安装会话；false 表示被权限拦截或提交失败
      */
-    static boolean install(Activity a, File apk) {
+    static boolean install(Context c, File apk) {
         // SPEC-035：canRequestPackageInstalls 是 API 26 才有的检查，
         // Android 5.1 由系统安装界面自行询问「未知来源」，这里直接提交会话
-        if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
-            Toast.makeText(a, R.string.update_perm_required, Toast.LENGTH_LONG).show();
+        if (Build.VERSION.SDK_INT >= 26 && !c.getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(c, R.string.update_perm_required, Toast.LENGTH_LONG).show();
             try {
                 Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:" + a.getPackageName()));
+                        Uri.parse("package:" + c.getPackageName()));
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                a.startActivity(i);
+                c.startActivity(i);
             } catch (Exception ignored) {
                 // 个别电视固件没有该设置页，提示已足够
             }
             return false;
         }
         try {
-            PackageInstaller pi = a.getPackageManager().getPackageInstaller();
+            PackageInstaller pi = c.getPackageManager().getPackageInstaller();
             PackageInstaller.SessionParams p = new PackageInstaller.SessionParams(
                     PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-            p.setAppPackageName(a.getPackageName());
+            // 不设置 setAppPackageName：从 APK 自身读取包名，支持任意第三方应用
             int id = pi.createSession(p);
             try (PackageInstaller.Session s = pi.openSession(id)) {
                 try (InputStream in = new FileInputStream(apk);
@@ -346,18 +348,68 @@ final class Updater {
                     while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
                     s.fsync(out);
                 }
-                Intent status = new Intent(a, UpdateInstallReceiver.class);
+                Intent status = new Intent(c, UpdateInstallReceiver.class);
                 // 必须 MUTABLE：系统要把 STATUS / EXTRA_INTENT 等 extras 填进来，
                 // IMMUTABLE 会被系统忽略，接收器只会收到空状态（SPEC-017 实测踩坑）
                 int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE;
-                s.commit(PendingIntent.getBroadcast(a, 0, status, flags).getIntentSender());
+                s.commit(PendingIntent.getBroadcast(c, 0, status, flags).getIntentSender());
             }
             return true;
         } catch (Exception e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
-            Toast.makeText(a, a.getString(R.string.update_install_failed, msg),
+            Toast.makeText(c, c.getString(R.string.update_install_failed, msg),
                     Toast.LENGTH_LONG).show();
             return false;
+        }
+    }
+
+    /**
+     * SPEC-040：从任意 http/https 链接下载 APK 到指定文件。
+     * 流式写入，超过 maxBytes 抛异常；失败删除半成品。
+     */
+    static File downloadUrl(Context c, String url, File dest, long maxBytes) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(TIMEOUT_MS);
+            // 下载大文件读超时放宽到 60 秒
+            conn.setReadTimeout(60000);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestProperty("Accept", "application/octet-stream");
+            conn.setRequestProperty("User-Agent", "TVRemote-OTA");
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                throw new Exception(c.getString(R.string.update_err_http, code));
+            }
+            File parent = dest.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                throw new Exception(c.getString(R.string.update_err_network));
+            }
+            if (dest.exists() && !dest.delete()) {
+                throw new Exception(c.getString(R.string.update_err_size));
+            }
+            long total = 0;
+            try (InputStream in = conn.getInputStream();
+                 FileOutputStream out = new FileOutputStream(dest)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (total > maxBytes) {
+                        throw new Exception("apk too large");
+                    }
+                    out.write(buf, 0, n);
+                }
+            }
+            return dest;
+        } catch (IOException e) {
+            dest.delete();
+            throw new Exception(c.getString(R.string.update_err_network), e);
+        } catch (Exception e) {
+            dest.delete();
+            throw e;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 

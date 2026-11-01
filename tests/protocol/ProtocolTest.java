@@ -110,6 +110,14 @@ public class ProtocolTest {
         // NFR
         tc_rtt();
 
+        // SPEC-040 APK 推送安装
+        tc_apkurl_ok();
+        tc_apkurl_http_scheme();
+        tc_apkurl_bad_scheme();
+        tc_apkurl_missing();
+        tc_apkurl_wrong_token();
+        tc_apkurl_invalid_b64();
+
         box.close();
         System.out.println();
         System.out.println("结果：通过 " + passed + "，失败 " + failed
@@ -829,6 +837,44 @@ public class ProtocolTest {
         } finally {
             lan.close();
         }
+    }
+
+    // ---------------- SPEC-040 APK 推送安装 ----------------
+
+    static void tc_apkurl_ok() throws Exception {
+        String b64 = java.util.Base64.getEncoder().encodeToString(
+                "https://example.com/app.apk".getBytes("UTF-8"));
+        box.lastApkUrl = null;
+        box.apkUrlCount = 0;
+        eq("apkurl_ok", "OK", rawCmd("APKURL " + box.token() + " " + b64));
+        check("apkurl_recorded", "https://example.com/app.apk".equals(box.lastApkUrl)
+                && box.apkUrlCount == 1, "盒端应记录下载链接");
+    }
+
+    static void tc_apkurl_http_scheme() throws Exception {
+        String b64 = java.util.Base64.getEncoder().encodeToString(
+                "http://example.com/a.apk".getBytes("UTF-8"));
+        eq("apkurl_http_scheme", "OK", rawCmd("APKURL " + box.token() + " " + b64));
+    }
+
+    static void tc_apkurl_bad_scheme() throws Exception {
+        String b64 = java.util.Base64.getEncoder().encodeToString(
+                "ftp://example.com/a.apk".getBytes("UTF-8"));
+        eq("apkurl_bad_scheme", "ERR arg", rawCmd("APKURL " + box.token() + " " + b64));
+    }
+
+    static void tc_apkurl_missing() throws Exception {
+        eq("apkurl_missing", "ERR arg", rawCmd("APKURL " + box.token()));
+    }
+
+    static void tc_apkurl_wrong_token() throws Exception {
+        String b64 = java.util.Base64.getEncoder().encodeToString(
+                "https://example.com/a.apk".getBytes("UTF-8"));
+        eq("apkurl_wrong_token", "ERR auth", rawCmd("APKURL deadbeef " + b64));
+    }
+
+    static void tc_apkurl_invalid_b64() throws Exception {
+        eq("apkurl_invalid_b64", "ERR arg", rawCmd("APKURL " + box.token() + " !!!not-b64!!!"));
     }
 
     // ---------------- 工具方法 ----------------

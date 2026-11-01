@@ -49,8 +49,21 @@ public class WebServer {
         byte[] read(String name);
     }
 
+    /**
+     * SPEC-040：APK 文件上传处理器（由 ServerService 注入）。
+     * WebServer 只负责把请求体流式写入 createTargetFile() 返回的文件，
+     * 写完后调 onUploadComplete，由实现方校验魔数并调起安装。
+     */
+    public interface ApkUploadHandler {
+        java.io.File createTargetFile();
+        /** 返回 null 表示成功；否则返回错误码字符串（如 "notapk"） */
+        String onUploadComplete(java.io.File apk);
+    }
+
     /** HTTP 请求体上限 64KB（SPEC-020 NFR-20-4） */
     private static final int MAX_BODY = 64 * 1024;
+    /** SPEC-040：APK 上传上限 500MB */
+    private static final long MAX_APK_BYTES = 500L * 1024 * 1024;
     /** 请求行/请求头单行上限 */
     private static final int MAX_LINE = 8192;
     private static final int SOCKET_TIMEOUT_MS = 10000;
@@ -77,6 +90,7 @@ public class WebServer {
     private final int httpsPort;
     private final CommandHandler commands;
     private final ResourceProvider resources;
+    private final ApkUploadHandler apkUpload;
     private final SSLServerSocketFactory tlsFactory;
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private ServerSocket httpSocket;
@@ -84,11 +98,13 @@ public class WebServer {
     private volatile boolean running = true;
 
     public WebServer(int httpPort, int httpsPort, CommandHandler commands,
-                     ResourceProvider resources, SSLServerSocketFactory tlsFactory) {
+                     ResourceProvider resources, ApkUploadHandler apkUpload,
+                     SSLServerSocketFactory tlsFactory) {
         this.httpPort = httpPort;
         this.httpsPort = httpsPort;
         this.commands = commands;
         this.resources = resources;
+        this.apkUpload = apkUpload;
         this.tlsFactory = tlsFactory;
     }
 
@@ -169,6 +185,21 @@ public class WebServer {
             }
 
             int len = intHeader(headers.get("content-length"));
+
+            // SPEC-040：APK 文件上传走流式写入，不进内存（绕开 64KB 上限）
+            String[] rlParts = requestLine.split(" ");
+            String rlMethod = rlParts.length > 0 ? rlParts[0].toUpperCase(Locale.US) : "";
+            String rlTarget = rlParts.length > 1 ? rlParts[1] : "";
+            String rlPath = rlTarget;
+            int q = rlTarget.indexOf('?');
+            if (q >= 0) rlPath = rlTarget.substring(0, q);
+            if (rlPath.equals("/api/apk-upload") && rlMethod.equals("POST")) {
+                String ip = s.getInetAddress() == null
+                        ? "unknown" : s.getInetAddress().getHostAddress();
+                write(s, handleApkUpload(headers, len, in, ip));
+                return;
+            }
+
             if (len > MAX_BODY) {
                 write(s, Response.json(413, "{\"ok\":false,\"err\":\"toolong\"}", false));
                 return;
@@ -181,6 +212,54 @@ public class WebServer {
             write(s, resp);
         } catch (Exception e) {
             log("request: " + e.getMessage());
+        }
+    }
+
+    // ---------------- SPEC-040 APK 文件上传（流式） ----------------
+
+    private Response handleApkUpload(Map<String, String> headers, int len,
+                                     InputStream in, String ip) {
+        if (apkUpload == null) return Response.text(404, "Not Found");
+        String token = headers.get("x-token");
+        if (token == null || token.isEmpty()) {
+            return Response.json(401, err("auth"), true);
+        }
+        // 复用 commands 的 token 校验：用只读的 LIST 命令确认 token 有效
+        String auth = commands.handle("LIST " + token, ip);
+        if (auth.startsWith("ERR auth")) {
+            return Response.json(401, err("auth"), true);
+        }
+        if (len <= 0) return Response.json(200, err("arg"), true);
+        if (len > MAX_APK_BYTES) {
+            return Response.json(413, "{\"ok\":false,\"err\":\"toolong\"}", false);
+        }
+        java.io.File dest = apkUpload.createTargetFile();
+        try {
+            java.io.File parent = dest.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                return Response.json(200, err("exec"), true);
+            }
+            long total = 0;
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while (total < len && (n = in.read(buf)) != -1) {
+                    total += n;
+                    if (total > MAX_APK_BYTES) {
+                        return Response.json(413, "{\"ok\":false,\"err\":\"toolong\"}", false);
+                    }
+                    out.write(buf, 0, n);
+                }
+            }
+            String err = apkUpload.onUploadComplete(dest);
+            if (err != null) {
+                dest.delete();
+                return Response.json(200, err(err), true);
+            }
+            return Response.json(200, "{\"ok\":true}", true);
+        } catch (Exception e) {
+            dest.delete();
+            return Response.json(200, err("exec"), true);
         }
     }
 
@@ -263,6 +342,15 @@ public class WebServer {
                 String pkg = jsonString(body, "pkg");
                 if (pkg == null) return Response.json(200, err("arg"), true);
                 return plain(commands.handle("APP " + token + " " + pkg, ip));
+            }
+
+            // SPEC-040：发送 APK 下载链接，盒子下载后自动安装
+            if (path.equals("/api/apkurl")) {
+                if (!post) return Response.text(405, "Method Not Allowed");
+                String url = jsonString(body, "url");
+                if (url == null || url.isEmpty()) return Response.json(200, err("arg"), true);
+                String b64 = b64Encode(url.getBytes(StandardCharsets.UTF_8));
+                return plain(commands.handle("APKURL " + token + " " + b64, ip));
             }
 
             // SPEC-029：网页触控板鼠标模式（相对位移 + 光标操作）

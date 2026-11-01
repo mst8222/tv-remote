@@ -15,13 +15,17 @@ import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -131,8 +135,21 @@ public class ServerService extends Service {
 
     private void startWeb() {
         try {
+            WebServer.ApkUploadHandler uploadHandler = new WebServer.ApkUploadHandler() {
+                @Override
+                public java.io.File createTargetFile() {
+                    java.io.File dir = new java.io.File(getCacheDir(), "apkpush");
+                    return new java.io.File(dir, "upload.apk");
+                }
+
+                @Override
+                public String onUploadComplete(java.io.File apk) {
+                    if (!isApkFile(apk)) return "notapk";
+                    return Updater.install(ServerService.this, apk) ? null : "install";
+                }
+            };
             web = new WebServer(WEB_HTTP_PORT, WEB_HTTPS_PORT, this::dispatch,
-                    this::readAsset, buildTls());
+                    this::readAsset, uploadHandler, buildTls());
             web.start();
         } catch (Exception e) {
             Log.e(TAG, "web start failed", e);
@@ -497,6 +514,23 @@ public class ServerService extends Service {
                         if (icon == null) return "ERR arg";
                         return "OK " + icon;
                     }
+                case "APKURL": {
+                    // SPEC-040：从下载链接安装 APK。立即返回 OK，后台异步下载并调起安装
+                    if (p.length < 3) return "ERR arg";
+                    String url;
+                    try {
+                        url = new String(WebServer.b64Decode(p[2].trim()), "UTF-8");
+                    } catch (Exception e) {
+                        return "ERR arg";
+                    }
+                    String low = url.toLowerCase(java.util.Locale.US);
+                    if (!low.startsWith("http://") && !low.startsWith("https://")) {
+                        return "ERR arg";
+                    }
+                    final String apkUrl = url;
+                    pool.submit(() -> downloadAndInstall(apkUrl));
+                    return "OK";
+                }
                 default:
                     return "ERR cmd";
             }
@@ -570,6 +604,46 @@ public class ServerService extends Service {
             Log.w(TAG, "launch fail: " + pkg, e);
             return false;
         }
+    }
+
+    // ---------------- SPEC-040 APK 下载与安装 ----------------
+
+    /** 下载上限 500MB */
+    private static final long APK_MAX_BYTES = 500L * 1024 * 1024;
+
+    /** SPEC-040：后台下载 APK 链接并调起系统安装界面 */
+    private void downloadAndInstall(String url) {
+        File dir = new File(getCacheDir(), "apkpush");
+        File apk = new File(dir, System.currentTimeMillis() + ".apk");
+        try {
+            Updater.downloadUrl(this, url, apk, APK_MAX_BYTES);
+            if (!isApkFile(apk)) {
+                apk.delete();
+                toastOnMain(getString(R.string.apk_not_apk));
+                return;
+            }
+            Updater.install(this, apk);
+        } catch (Exception e) {
+            Log.e(TAG, "apk download/install fail: " + url, e);
+            toastOnMain(getString(R.string.apk_download_failed));
+        }
+    }
+
+    /** 校验 ZIP 魔数 PK\x03\x04（APK 是 ZIP 格式） */
+    private static boolean isApkFile(File f) {
+        try (FileInputStream in = new FileInputStream(f)) {
+            byte[] h = new byte[4];
+            int n = in.read(h);
+            return n >= 4 && h[0] == 'P' && h[1] == 'K' && h[2] == 0x03 && h[3] == 0x04;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 在主线程弹 Toast（后台线程调用） */
+    private void toastOnMain(final String msg) {
+        new Handler(Looper.getMainLooper()).post(() ->
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show());
     }
 
     // ---------------- UDP 广播（供手机自动发现） ----------------

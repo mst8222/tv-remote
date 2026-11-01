@@ -91,6 +91,20 @@
     <div id="apps" class="apps"></div>
   </section>
 
+  <!-- SPEC-040 APK 推送安装 -->
+  <section id="apkCard" class="card" hidden>
+    <h2 data-i18n="apkTitle">安装 APK</h2>
+    <button id="apkPickBtn" class="primary" data-i18n="apkPickFile">选择 APK 文件</button>
+    <input id="apkFile" type="file" accept=".apk,application/vnd.android.package-archive" hidden>
+    <p class="sub" data-i18n="apkUrlLabel">或填写 APK 下载链接：</p>
+    <div class="inputRow">
+      <input id="apkUrl" autocomplete="off" placeholder="https://..."
+             data-i18n-ph="apkUrlHint">
+      <button id="apkUrlBtn" class="primary small" data-i18n="apkSendUrl">发送</button>
+    </div>
+    <p id="apkMsg" class="msg"></p>
+  </section>
+
   <section id="offlineCard" class="card warn" hidden>
     <h2 data-i18n="offlineTitle">未连接到盒子</h2>
     <p class="sub" data-i18n="offlineMsg"></p>

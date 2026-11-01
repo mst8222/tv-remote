@@ -137,6 +137,13 @@ public class LanClient {
         if (!r.startsWith("OK")) throw new Exception(r);
     }
 
+    /** SPEC-040：发送 APK 下载链接，盒子下载完成后自动调起安装 */
+    public void installApkUrl(String url) throws Exception {
+        String b64 = Base64.getEncoder().encodeToString(url.getBytes("UTF-8"));
+        String r = cmd("APKURL " + token + " " + b64, 5000);
+        if (!r.startsWith("OK")) throw new Exception(r);
+    }
+
     /** SPEC-016：列出盒子第三方应用，载荷为「包名|base64(应用名)」逗号分隔 */
     public String list() throws Exception {
         String r = cmd("LIST " + token, 6000);

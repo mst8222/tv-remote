@@ -25,13 +25,44 @@ public class WebApiTest {
     static int port;
     static int passed = 0;
     static int failed = 0;
+    // SPEC-040：mock APK 上传处理器，记录上传结果
+    static volatile String apkUploadErr;
+    static volatile byte[] apkUploadBytes;
 
     public static void main(String[] args) throws Exception {
         box = new MockBoxServer("123456");
         box.packages = "com.android.settings|"
                 + b64("设置") + ",com.example.app|" + b64("示例应用");
         port = freePort();
-        web = new WebServer(port, 0, box::dispatch, WebApiTest::asset, null);
+        WebServer.ApkUploadHandler uploadHandler = new WebServer.ApkUploadHandler() {
+            @Override
+            public java.io.File createTargetFile() {
+                try {
+                    return java.io.File.createTempFile("apktest", ".apk");
+                } catch (Exception e) {
+                    return new java.io.File(System.getProperty("java.io.tmpdir"), "apktest.apk");
+                }
+            }
+            @Override
+            public String onUploadComplete(java.io.File apk) {
+                try {
+                    apkUploadBytes = Files.readAllBytes(apk.toPath());
+                } catch (Exception e) {
+                    apkUploadBytes = new byte[0];
+                }
+                apk.delete();
+                // 模拟盒端校验 ZIP 魔数
+                if (apkUploadBytes.length >= 4
+                        && apkUploadBytes[0] == 'P' && apkUploadBytes[1] == 'K'
+                        && apkUploadBytes[2] == 0x03 && apkUploadBytes[3] == 0x04) {
+                    apkUploadErr = null;
+                } else {
+                    apkUploadErr = "notapk";
+                }
+                return apkUploadErr;
+            }
+        };
+        web = new WebServer(port, 0, box::dispatch, WebApiTest::asset, uploadHandler, null);
         web.start();
         Thread.sleep(150);
 
@@ -48,6 +79,8 @@ public class WebApiTest {
         tc_touch();
         tc_cors();
         tc_body_limit();
+        tc_apkurl();
+        tc_apk_upload();
 
         web.stop();
         box.close();
@@ -337,6 +370,80 @@ public class WebApiTest {
             // 服务端提前关闭连接也视为拒绝
             record("body_limit", true, "超大请求被拒绝（连接关闭）");
         }
+    }
+
+    // ---------------- SPEC-040 APK 推送安装 ----------------
+
+    static void tc_apkurl() throws Exception {
+        // 缺少 token -> 401
+        Res noTok = req("POST", "/api/apkurl", "{\"url\":\"https://x/a.apk\"}", null);
+        check("apkurl_no_token", noTok.code == 401, "无 token 应 401，实际 " + noTok.code);
+
+        // 正常链接 -> OK
+        box.resetPairGuard();
+        Res ok = req("POST", "/api/apkurl",
+                "{\"url\":\"https://example.com/app.apk\"}", box.token());
+        check("apkurl_ok", ok.code == 200 && ok.text().contains("\"ok\":true"),
+                "有效链接应返回 ok，实际 " + ok.text());
+
+        // 非法 scheme -> ERR arg
+        Res bad = req("POST", "/api/apkurl",
+                "{\"url\":\"ftp://example.com/a.apk\"}", box.token());
+        check("apkurl_bad_scheme", bad.code == 200 && bad.text().contains("\"arg\""),
+                "非法 scheme 应返回 arg，实际 " + bad.text());
+
+        // 缺少 url 字段 -> ERR arg
+        Res miss = req("POST", "/api/apkurl", "{}", box.token());
+        check("apkurl_missing_url", miss.code == 200 && miss.text().contains("\"arg\""),
+                "缺 url 应返回 arg，实际 " + miss.text());
+    }
+
+    static void tc_apk_upload() throws Exception {
+        // 缺少 token -> 401
+        Res noTok = reqBytes("POST", "/api/apk-upload",
+                new byte[]{'P', 'K', 0x03, 0x04, 0, 0}, null);
+        check("apk_upload_no_token", noTok.code == 401,
+                "无 token 应 401，实际 " + noTok.code);
+
+        // 合法 APK（ZIP 魔数）-> ok
+        byte[] apk = new byte[]{'P', 'K', 0x03, 0x04, 1, 2, 3, 4};
+        Res ok = reqBytes("POST", "/api/apk-upload", apk, box.token());
+        check("apk_upload_ok", ok.code == 200 && ok.text().contains("\"ok\":true"),
+                "合法 APK 应返回 ok，实际 " + ok.text());
+        check("apk_upload_bytes", apkUploadBytes != null
+                && java.util.Arrays.equals(apk, apkUploadBytes),
+                "上传字节应与盒端收到的一致");
+
+        // 非 APK 文件 -> notapk
+        byte[] txt = "hello world".getBytes(StandardCharsets.UTF_8);
+        Res bad = reqBytes("POST", "/api/apk-upload", txt, box.token());
+        check("apk_upload_not_apk", bad.code == 200 && bad.text().contains("notapk"),
+                "非 APK 应返回 notapk，实际 " + bad.text());
+    }
+
+    /** SPEC-040：发送原始字节体（不走 JSON），用于 APK 上传测试 */
+    static Res reqBytes(String method, String path, byte[] body, String token) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(
+                "http://127.0.0.1:" + port + path).openConnection();
+        c.setRequestMethod(method);
+        c.setConnectTimeout(2000);
+        c.setReadTimeout(5000);
+        c.setInstanceFollowRedirects(false);
+        if (token != null) c.setRequestProperty("X-Token", token);
+        if (body != null) {
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/octet-stream");
+            try (OutputStream out = c.getOutputStream()) {
+                out.write(body);
+            }
+        }
+        int code = c.getResponseCode();
+        InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        byte[] data = readAll(in);
+        return new Res(code, c.getContentType(), data, c.getHeaderField("Cache-Control"),
+                c.getHeaderField("Access-Control-Allow-Origin"),
+                c.getHeaderField("Access-Control-Allow-Methods"),
+                c.getHeaderField("Access-Control-Allow-Headers"));
     }
 
     // ---------------- 基础工具 ----------------

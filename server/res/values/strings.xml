@@ -47,6 +47,10 @@
     <string name="update_err_size">下载的安装包不完整，请重试</string>
     <string name="update_err_json">更新信息解析失败</string>
 
+    <!-- SPEC-040 APK 推送安装 -->
+    <string name="apk_not_apk">下载的文件不是有效的 APK 安装包</string>
+    <string name="apk_download_failed">APK 下载失败，请检查链接或网络</string>
+
     <!-- 前台通知 -->
     <string name="ntf_channel">遥控服务</string>
     <string name="ntf_title">TV 遥控服务</string>
