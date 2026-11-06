@@ -447,6 +447,16 @@ Known limitations:
 
 ## Versions
 
+- **v1.7.6**: the box app gains a display self-healing watchdog. After sleep/wake or an HDMI
+  hot-plug the picture can shrink into a small top-left area (HWC falls back to 1280x960 while
+  the panel's native mode is 2048x1536 and does not scale). Every 2 seconds the guard compares the
+  kernel's current display mode with the EDID preferred mode; only 5 consecutive mismatches count
+  as a fault, and the fix restarts `vendor.hwcomposer-2-1` so HWC re-reads the EDID (this also soft
+  reboots the framework, about 30 seconds of black screen). A pending marker is committed before
+  acting and checked after the process restarts; actions are at least 60 seconds apart and capped
+  at 3 per fault, after which the guard only logs and asks for a manual power cycle. It does not
+  judge while the screen is off, HDMI is disconnected, or the EDID is unreadable. The box UI gains
+  a "Display guard" status row.
 - **v1.7.5**: APK push install. The Android app's "Install APK" card lets you pick a local APK
   and stream it to the box over HTTP; after verifying the ZIP magic number the system installer
   is launched. You can also enter an APK download link and the box downloads it in the background
