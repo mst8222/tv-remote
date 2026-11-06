@@ -40,6 +40,8 @@ public class MainActivity extends Activity {
     private TextView statusView, ipView, codeView, a11yView, updateView, updateBtn;
     /** SPEC-039：注入模式行与 ADB 调试状态行（均可聚焦点击） */
     private TextView injectView, adbView;
+    /** 显示异常自愈守护的状态行 */
+    private TextView guardView;
     /** ADB 后台探测进行中，避免 tick 每 3 秒重复起线程 */
     private boolean probing;
     /** SPEC-024：网页遥控二维码与其提示；qrKey 记录当前二维码对应的 IP + 配对码 */
@@ -100,6 +102,8 @@ public class MainActivity extends Activity {
         bindRow(injectView, this::onInjectToggle);
         adbView = buildRow(statusCard);
         bindRow(adbView, this::onAdbAction);
+        // 显示异常自愈状态：只读展示，失败时提示人工处理
+        guardView = buildRow(statusCard);
 
         // 配对码卡：大号蓝字 + 使用提示（二维码属于「连接地址」，见下）
         LinearLayout pairCard = card(R.string.ui_grp_pair);
@@ -552,7 +556,31 @@ public class MainActivity extends Activity {
         boolean adbMode = AdbShell.enabled(this);
         updateInjectRows(adbMode);
         if (adbMode && !AdbShell.isConnected() && !probing) probeAdb();
+        updateGuardRow();
         h.postDelayed(this::tick, 3000);
+    }
+
+    /** 显示异常自愈守护的状态：正常/自愈中/需人工处理 */
+    private void updateGuardRow() {
+        String size = DisplayGuard.stateSize();
+        switch (DisplayGuard.state()) {
+            case DisplayGuard.ST_NORMAL:
+                guardView.setText(getString(R.string.ui_guard_ok, size));
+                guardView.setTextColor(GREEN);
+                break;
+            case DisplayGuard.ST_HEALING:
+                guardView.setText(getString(R.string.ui_guard_healing, size));
+                guardView.setTextColor(ACCENT);
+                break;
+            case DisplayGuard.ST_MANUAL:
+                guardView.setText(getString(R.string.ui_guard_manual, size));
+                guardView.setTextColor(RED);
+                break;
+            default:
+                guardView.setText(R.string.ui_guard_wait);
+                guardView.setTextColor(SUB);
+                break;
+        }
     }
 
     /**

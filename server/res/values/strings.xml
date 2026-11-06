@@ -24,6 +24,10 @@
     <string name="ui_adb_off">ADB 调试：未开启（按 OK 尝试开启）</string>
     <string name="ui_adb_on">已打开 ADB 调试，正在连接…</string>
     <string name="ui_adb_manual">请打开「开发者选项 → USB 调试 / 网络调试（ADB 调试）」，再到本页按 OK 连接</string>
+    <string name="ui_guard_ok">显示守护：正常（%1$s）</string>
+    <string name="ui_guard_healing">显示守护：画面异常 %1$s，正在自愈</string>
+    <string name="ui_guard_manual">显示守护：%1$s 自愈失败，请断电重启盒子</string>
+    <string name="ui_guard_wait">显示守护：等待采样</string>
     <string name="ui_tip">第一次使用请在系统「设置 → 无障碍」里开启「TV遥控服务」，不需要 root。\n然后在手机 App 里选择「直连」或「蓝牙」，输入上面 6 位配对码即可。\n之后每次开机（包括断电重启）服务都会自动启动。\n\n若要把云视听小电视等只认真实按键的应用也控好，请把「注入模式」切到 ADB，\n并在系统开发者选项里打开 ADB 调试（首次连接需在电视上点一次「允许」）。</string>
     <string name="a11y_desc">接收手机发来的遥控指令，执行返回、主页、方向键、音量与文字输入等操作。</string>
 

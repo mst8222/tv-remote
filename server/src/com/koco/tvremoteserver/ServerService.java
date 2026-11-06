@@ -110,6 +110,8 @@ public class ServerService extends Service {
         new Thread(this::serveTcp, "tcp-accept").start();
         new Thread(this::broadcastLoop, "udp-broadcast").start();
         startWeb();
+        // 显示异常自愈守护：跟随前台服务常驻，Activity 销毁不影响
+        DisplayGuard.start(this);
     }
 
     @Override
@@ -126,6 +128,7 @@ public class ServerService extends Service {
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         try { if (udp != null) udp.close(); } catch (Exception ignored) {}
         if (web != null) web.stop();
+        DisplayGuard.stop();
         AdbShell.reset();
         TvRemoteAccessibilityService.hideAirCursor();
         super.onDestroy();
