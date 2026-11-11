@@ -809,11 +809,41 @@
     for (var i = 0; i < btns.length; i++) {
       (function (btn) {
         bindHaptic(btn);
-        btn.addEventListener('click', function () {
-          sendKey(parseInt(btn.getAttribute('data-key'), 10));
-        });
+        var code = parseInt(btn.getAttribute('data-key'), 10);
+        // SPEC-041：方向盘四键支持按住连发（视频快进/快退），其余键保持单击
+        if (btn.classList.contains('d')) {
+          bindDpad(btn, code);
+        } else {
+          btn.addEventListener('click', function () {
+            sendKey(code);
+          });
+        }
       })(btns[i]);
     }
+  }
+
+  /* SPEC-041：方向盘按住连发。pointerdown 立即发一次（短按行为不变），
+     500ms 长按阈值后每 120ms 连发；抬起、滑出或取消即停止，避免卡死连发。 */
+  function bindDpad(btn, code) {
+    var delayTimer = null;
+    var repeatTimer = null;
+
+    function stop() {
+      if (delayTimer) { clearTimeout(delayTimer); delayTimer = null; }
+      if (repeatTimer) { clearInterval(repeatTimer); repeatTimer = null; }
+    }
+
+    btn.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      stop();
+      sendKey(code);
+      delayTimer = setTimeout(function () {
+        repeatTimer = setInterval(function () { sendKey(code); }, 120);
+      }, 500);
+    });
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerleave', stop);
   }
 
   function bindOk() {

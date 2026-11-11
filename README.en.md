@@ -447,6 +447,11 @@ Known limitations:
 
 ## Versions
 
+- **v1.7.7**: the D-pad keys support hold-to-repeat. Holding a direction key on the phone app or
+  the web remote keeps sending key events after about half a second (every 120ms over LAN/web;
+  over Bluetooth the box system auto-repeats like a physical remote). While playing video, holding
+  Left/Right scrubs the progress bar continuously; in lists, holding Up/Down scrolls fast.
+  Releasing stops immediately, and a short tap behaves exactly as before.
 - **v1.7.6**: the box app gains a display self-healing watchdog. After sleep/wake or an HDMI
   hot-plug the picture can shrink into a small top-left area (HWC falls back to 1280x960 while
   the panel's native mode is 2048x1536 and does not scale). Every 2 seconds the guard compares the

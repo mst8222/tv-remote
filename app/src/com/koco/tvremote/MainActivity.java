@@ -134,8 +134,12 @@ public class MainActivity extends Activity {
             lanPressLong(23);
         }
     };
+    /** SPEC-041：方向盘四键（keycode 19..22 减 19 作索引）的按住连发任务 */
+    private final Runnable[] padRepeats = new Runnable[4];
     /** 与 Android 系统长按阈值一致 */
     private static final long LONG_PRESS_MS = 500;
+    /** SPEC-041：方向盘按住连发间隔（直连每条 KEY 为一次 TCP 短连接，需留盒端注入时间） */
+    private static final long REPEAT_MS = 120;
     /** 陀螺仪死区（rad/s），抑制手抖 */
     private static final float GYRO_DEAD_ZONE = 0.05f;
     /** 每 20ms 角速度 -> 位移像素的换算系数（1 rad/s 约 600 px/s） */
@@ -255,6 +259,8 @@ public class MainActivity extends Activity {
         super.onPause();
         // SPEC-023：离开界面立即释放按压并关闭直连会话，避免光标/触摸卡住
         stopTouchpad();
+        // SPEC-041：退到后台停止方向键连发并释放蓝牙按键
+        stopPadRepeats();
         // SPEC-036：退到后台释放相机
         if (qrScanner != null) qrScanner.stop();
     }
@@ -838,10 +844,83 @@ public class MainActivity extends Activity {
         k.setTextSize(arrowText);
         k.setGravity(Gravity.CENTER);
         k.setBackground(ripple(0xFF2E3A4C, arrowLen / 2f, 0));
-        k.setOnClickListener(v -> press(code));
+        // SPEC-041：短按发一次；按住超过 LONG_PRESS_MS 后连发（视频快进/快退）。
+        // 蓝牙发 HID 按住/释放，由盒子系统自行重复；直连由客户端按 REPEAT_MS 连发。
+        k.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    // 按住期间禁止外层滚动容器拦截，否则手指轻微移动会变成 ACTION_CANCEL
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    haptic();
+                    padDown(code);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    padUp(code);
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                    return true;
+                default:
+                    return true;
+            }
+        });
         FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(dp(arrowLen), dp(arrowLen), gravity);
         p.setMargins(l, t, r, b);
         pad.addView(k, p);
+    }
+
+    /** SPEC-041：方向盘按下。直连立即发一次并启动连发任务；蓝牙保持按下状态 */
+    private void padDown(final int code) {
+        if (btMode) {
+            if (bt == null || !bt.isReady()) {
+                setStatus(getString(R.string.bt_not_ready), false);
+                return;
+            }
+            switch (code) {
+                case 19: btSend(bt.sendKeyDown(BtHid.K_UP)); break;
+                case 20: btSend(bt.sendKeyDown(BtHid.K_DOWN)); break;
+                case 21: btSend(bt.sendKeyDown(BtHid.K_LEFT)); break;
+                case 22: btSend(bt.sendKeyDown(BtHid.K_RIGHT)); break;
+                default: break;
+            }
+            return;
+        }
+        if (lanMode) {
+            lanPress(code);
+            final int i = code - 19;
+            Runnable r = new Runnable() {
+                @Override public void run() {
+                    lanPress(code);
+                    ui.postDelayed(this, REPEAT_MS);
+                }
+            };
+            padRepeats[i] = r;
+            ui.postDelayed(r, LONG_PRESS_MS);
+            return;
+        }
+        setStatus(getString(R.string.select_mode_first), false);
+    }
+
+    /** SPEC-041：方向盘抬起。蓝牙释放按键；直连停止连发任务 */
+    private void padUp(int code) {
+        if (btMode && bt != null) bt.sendKeyUp();
+        Runnable r = padRepeats[code - 19];
+        if (r != null) {
+            ui.removeCallbacks(r);
+            padRepeats[code - 19] = null;
+        }
+    }
+
+    /** SPEC-041：停止全部连发任务；蓝牙按住期间退后台时释放按键，避免盒子判定为一直按住 */
+    private void stopPadRepeats() {
+        for (int i = 0; i < padRepeats.length; i++) {
+            if (padRepeats[i] != null) {
+                ui.removeCallbacks(padRepeats[i]);
+                padRepeats[i] = null;
+            }
+        }
+        if (bt != null) bt.sendKeyUp();
     }
 
     /** 中心 OK 光环圈：深底 + 3dp ACCENT 描边（参考图青环 OK 的深色版） */
