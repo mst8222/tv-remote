@@ -75,6 +75,7 @@ pairing and connection mode.
 | Touchpad | Direct mode with D-pad / Touch / Mouse segments: Touch maps your finger onto the box screen (tap exactly where you point), Mouse drags the box cursor; pick by box firmware capability |
 | OK long-press | BT mode keeps sending key-down and lets the TV app decide; direct mode sends a long-press command on release after 500 ms |
 | Multi-device | LAN scan, manual add, switch and delete; pairing and connection mode remembered per device |
+| Auto channel switch | Tapping text input, app shortcuts or the touchpad in BT mode switches to direct and runs it; tapping the air mouse in direct mode switches to BT; pairing/connecting continues the original action afterwards |
 | No root | Box side uses the accessibility service, `AudioManager` and `PackageManager` |
 | Auto start | Foreground service with a notification, started again on boot/reboot |
 | Bilingual UI | Phone: Chinese / English / follow system; box follows the box system language |
@@ -100,7 +101,7 @@ pinned first and always shown.
   <tr>
     <td align="center"><img src="docs/screenshots/phone-remote-en.png" width="250"><br>Phone app (English)</td>
     <td align="center"><img src="docs/screenshots/phone-remote-zh.png" width="250"><br>Phone app (Chinese)</td>
-    <td align="center"><img src="docs/screenshots/box-server-zh.png" width="460"><br>Box service (pair code / address / accessibility status)</td>
+    <td align="center"><img src="docs/screenshots/box-server-zh.png" width="460"><br>Box service (status / pair code / address / QR code)</td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/phone-devices-zh.png" width="250"><br>Device picker / delete</td>
@@ -201,6 +202,9 @@ Box requirements:
 2. Install "TV Remote Service" and **enable its accessibility service manually**:
    Box Settings → Accessibility → TV Remote Service.
    Without it, key/text commands return `ERR a11y`; volume, app launch and app list still work.
+   When "Accessibility service" is off on the box screen, a "Turn on" button appears at the end of
+   that row: focus it with the remote and press OK to open the system accessibility list, then press
+   OK once more on the switch.
    For apps that only react to real key events (e.g. cloud TV players), switch "Injection"
    to ADB on the box: enable ADB / USB debugging once in Developer options, then press OK
    on the box screen (the TV asks once to allow the connection).
@@ -208,7 +212,8 @@ Box requirements:
 4. Keep the box on the network. The service runs as a foreground service with a notification and is
    started on boot; on firmware that restricts background startup, allow the app to auto-start.
 5. Some box firmware does not respond to touch (H96 in our tests). Use the box's own remote to focus
-   and press OK, or open system settings over ADB.
+   and press OK, or open system settings over ADB. Focus starts on "Check for updates", the D-pad
+   moves row by row, and the "Turn on" buttons at the end of a row can be focused as well.
 
 Network requirements:
 
@@ -267,6 +272,7 @@ Network requirements:
 | Direct | Opens the pairing dialog if not paired; otherwise enters direct mode |
 | Long-press "Direct" | Clear the current device's pairing (after a box reset or box swap) |
 | BT | Register HID and connect the paired box; switching devices reconnects that device's target |
+| Wrong mode, no problem | When a button needs the other channel the app switches automatically: text / app shortcuts / touchpad go direct, the air mouse goes BT; if pairing or device selection is needed, the original action continues afterwards |
 | 中/EN | Chinese / English / follow system, applied immediately and persisted |
 | D-pad / OK | Uses system DPAD global actions; falls back to focus traversal on firmware that returns false |
 | OK short / long press | In BT mode the box keeps receiving "key down" while held, so TV apps judge long-press themselves; in direct mode a hold of 500 ms or more sends a long-press command on release |
@@ -380,7 +386,7 @@ Both box APKs are uploaded to the same release; in-app updates pick the asset th
 | "Connection timed out / failed" | Box offline, IP changed, or devices are not on the same Wi-Fi |
 | "Wrong pairing code" | Re-enter the 6 digits shown on the box; clearing app data changes the code |
 | "Pairing expired" | Long-press "Direct" to clear the pairing, then pair again |
-| "Accessibility service is off on the box" | Enable "TV Remote Service" in box Settings → Accessibility |
+| "Accessibility service is off on the box" | Enable "TV Remote Service" in box Settings → Accessibility; or focus "Turn on" at the end of that box row and press OK to jump straight to the same settings |
 | "The box could not perform it" | No focused control/input on the current screen; open the target screen first |
 | Scan finds nothing | Same Wi-Fi, box service running, AP isolation off; or add the IP manually |
 | D-pad does nothing | The screen has no focusable element (e.g. full-screen player); some firmware only supports focus traversal |
@@ -390,6 +396,8 @@ Both box APKs are uploaded to the same release; in-app updates pick the asset th
 | Cannot connect after a box reboot | Check auto-start; some firmware needs an explicit auto-start permission or reopening the app |
 | Web remote does not open | Confirm the same WiFi and use the address shown on the box (`http://<ip>:17880`); for `https://<ip>:17843` first trust the self-signed certificate in the browser |
 | An "Update" badge appears in the header | Every launch queries the latest GitHub and Gitee releases and prompts when either is newer; tap the badge to read the release notes. Ignoring it is fine |
+| Box shows "ADB debugging: not connected" | ADB / USB debugging is off in Developer options: press OK on that row or on its "Turn on" button to jump there (OK enables it directly once authorized); TVs without that page fall back to the settings home |
+| Box shows "ADB debugging: off" | You are in accessibility injection mode; press OK on the "Injection" row to switch to ADB, then press OK on the "ADB debugging" row to connect |
 
 ## Scope and limitations
 
@@ -447,6 +455,16 @@ Known limitations:
 
 ## Versions
 
+- **v1.8.0**: the app now switches channels automatically when you pick the "wrong" one. Tapping
+  text input, app shortcuts or the touchpad in BT mode moves the current box to direct mode and runs
+  the action; tapping the air mouse in direct mode switches to BT; if pairing or device selection is
+  needed, the original action continues once that finishes — no second tap, and only a failed
+  switch shows a short error. Main action buttons on the phone app, the box status rows and the web
+  remote now carry line icons, so text-only buttons have a fixed meaning. On the box, when
+  "Accessibility service" or "ADB debugging" is off, a "Turn on" button appears at the end of the
+  row: focus it with the remote and press OK to jump to the matching system setting instead of
+  digging through menus. The box UI also starts with focus on "Check for updates", and the D-pad
+  moves row by row.
 - **v1.7.7**: the D-pad keys support hold-to-repeat. Holding a direction key on the phone app or
   the web remote keeps sending key events after about half a second (every 120ms over LAN/web;
   over Bluetooth the box system auto-repeats like a physical remote). While playing video, holding

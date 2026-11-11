@@ -21,9 +21,11 @@
     <string name="ui_inject_adb">注入模式：ADB（按 OK 切回无障碍）</string>
     <string name="ui_adb_connected">ADB 调试：已连接（真实按键，等同蓝牙遥控）</string>
     <string name="ui_adb_disconnected">ADB 调试：未连接（按 OK 打开开发者选项）</string>
-    <string name="ui_adb_off">ADB 调试：未开启（按 OK 尝试开启）</string>
+    <string name="ui_adb_off">ADB 调试：未开启</string>
     <string name="ui_adb_on">已打开 ADB 调试，正在连接…</string>
     <string name="ui_adb_manual">请打开「开发者选项 → USB 调试 / 网络调试（ADB 调试）」，再到本页按 OK 连接</string>
+    <!-- 未开启时行尾的快捷按钮 -->
+    <string name="ui_enable_now">去开启</string>
     <string name="ui_guard_ok">显示守护：正常（%1$s）</string>
     <string name="ui_guard_healing">显示守护：画面异常 %1$s，正在自愈</string>
     <string name="ui_guard_manual">显示守护：%1$s 自愈失败，请断电重启盒子</string>

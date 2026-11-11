@@ -2,9 +2,12 @@ package com.koco.tvremoteserver;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
@@ -33,13 +36,16 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     // SPEC-012 配色：与手机端同套设计语言（深底 + 分组卡片 + 单一蓝色强调）
-    static final int BG = 0xFF0A0E14, SURFACE = 0xFF141A24, ACCENT = 0xFF4F7CFF,
+    static final int BG = 0xFF0A0E14, SURFACE = 0xFF141A24, SURFACE2 = 0xFF1C2430,
+            ACCENT = 0xFF4F7CFF,
             TXT = 0xFFEAEFF7, SUB = 0xFF8A94A6, DIMTXT = 0xFF5A6472,
             GREEN = 0xFF3DDC84, RED = 0xFFFF5A5A;
 
     private TextView statusView, ipView, codeView, a11yView, updateView, updateBtn;
     /** SPEC-039：注入模式行与 ADB 调试状态行（均可聚焦点击） */
     private TextView injectView, adbView;
+    /** 无障碍 / ADB 未开启时行尾的「去开启」按钮：可遥控聚焦，OK 直达对应系统设置 */
+    private TextView a11yBtn, adbBtn;
     /** 显示异常自愈守护的状态行 */
     private TextView guardView;
     /** ADB 后台探测进行中，避免 tick 每 3 秒重复起线程 */
@@ -57,12 +63,69 @@ public class MainActivity extends Activity {
     private Updater.Release pendingUpdate;
     private final Handler h = new Handler(Looper.getMainLooper());
 
+    /** OTA 自动检查持久化：上次检查时间、待安装版本 tag、上次检查到的 tag（用于 diff） */
+    private static final String SP_NAME = "ui";
+    private static final String SP_LAST_CHECK = "ota_last_check_ms";
+    private static final String SP_PENDING_TAG = "ota_pending_tag";
+    private static final long CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000L; // 24 小时
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(buildUi());
         ServerService.start(this);
+        // 恢复上次检查缓存的待安装版本 tag（若尚未过期）
+        restorePendingFromSp();
         tick();
+        // 盒子界面只能遥控操作：进入即把焦点放到更新按钮，用户按 OK 立刻可用
+        h.post(() -> updateBtn.requestFocus());
+        // 启动时后台静默探测一次，失败静默不打扰
+        autoCheckUpdate();
+    }
+
+    /** 从 SP 恢复上次检查到的待安装版本（仅 tag 相同且仍高于当前版本时才视为有效） */
+    private void restorePendingFromSp() {
+        SharedPreferences sp = getSharedPreferences(SP_NAME, MODE_PRIVATE);
+        String savedTag = sp.getString(SP_PENDING_TAG, "");
+        if (savedTag.isEmpty()) return;
+        String cur = Updater.currentVersion(this);
+        if (!Updater.isNewer(savedTag, cur)) return;
+        // 只恢复 tag，等真正 fetchLatest 时才拿到完整的 Release（notes/sources）
+        Updater.Release stub = new Updater.Release();
+        stub.tag = savedTag;
+        pendingUpdate = stub;
+        updateView.setText(getString(R.string.ui_update_found,
+                Updater.displayVersion(savedTag), cur));
+        setUpdateButton(R.string.ui_update_download);
+    }
+
+    /** SPEC-043：更新按钮文案与图标同步切换 */
+    private void setUpdateButton(int textRes) {
+        updateBtn.setText(textRes);
+        iconLeft(updateBtn,
+                textRes == R.string.ui_update_download ? R.drawable.ic_download : R.drawable.ic_refresh,
+                updateBtn.getCurrentTextColor());
+    }
+
+    /** SPEC-043：文字左侧图标 */
+    private void iconLeft(TextView v, int res, int color) {
+        Drawable d = getResources().getDrawable(res, getTheme()).mutate();
+        d.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+        d.setBounds(0, 0, dp(16), dp(16));
+        v.setCompoundDrawables(d, null, null, null);
+        v.setCompoundDrawablePadding(dp(6));
+    }
+
+    /** SPEC-043：只更新已有左侧图标的颜色，避免 tick 每秒重新分配 drawable */
+    private void tintLeftIcon(TextView v, int color) {
+        Drawable d = v.getCompoundDrawables()[0];
+        if (d != null) d.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+    }
+
+    /** SPEC-043：状态行文字与左侧图标同步变色 */
+    private void setRowColor(TextView v, int color) {
+        v.setTextColor(color);
+        tintLeftIcon(v, color);
     }
 
     private int dp(float v) {
@@ -90,18 +153,30 @@ public class MainActivity extends Activity {
         a11yView.setTextSize(13);
         a11yView.setTextColor(SUB);
         a11yView.setPadding(0, dp(8), 0, 0);
+        iconLeft(a11yView, R.drawable.ic_accessibility, SUB); // SPEC-043
         // 盒子界面不响应触摸，同时设为可聚焦，便于物理遥控导航后按 OK
         a11yView.setClickable(true);
         a11yView.setFocusable(true);
+        focusableRow(a11yView);
         a11yView.setOnClickListener(v -> openA11ySettings());
-        statusCard.addView(a11yView);
+        bindKey(a11yView, a11yView::performClick);
+        // 未开启时行尾出现「去开启」，直达系统无障碍服务列表
+        a11yBtn = pill(R.string.ui_enable_now, this::openA11ySettings);
+        statusCard.addView(rowWrap(a11yView, a11yBtn));
 
         // SPEC-039：注入模式（无障碍 / ADB）+ ADB 调试状态。
         // 盒子界面不响应触摸，同样设为可聚焦，用遥控导航后按 OK 触发
         injectView = buildRow(statusCard);
+        iconLeft(injectView, R.drawable.ic_inject, SUB); // SPEC-043
         bindRow(injectView, this::onInjectToggle);
-        adbView = buildRow(statusCard);
+        adbView = new TextView(this);
+        adbView.setTextSize(13);
+        adbView.setTextColor(SUB);
+        iconLeft(adbView, R.drawable.ic_adb, SUB); // SPEC-043
         bindRow(adbView, this::onAdbAction);
+        // ADB 未连通时行尾出现「去开启」，与状态行动作一致（能自开则自开，否则跳开发者选项）
+        adbBtn = pill(R.string.ui_enable_now, this::onAdbAction);
+        statusCard.addView(rowWrap(adbView, adbBtn));
         // 显示异常自愈状态：只读展示，失败时提示人工处理
         guardView = buildRow(statusCard);
 
@@ -176,7 +251,7 @@ public class MainActivity extends Activity {
         updateCard.addView(updateView, lpRow(0));
 
         updateBtn = new TextView(this);
-        updateBtn.setText(R.string.ui_update_check);
+        setUpdateButton(R.string.ui_update_check);
         updateBtn.setTextSize(15);
         updateBtn.setTextColor(TXT);
         updateBtn.setGravity(Gravity.CENTER);
@@ -184,24 +259,33 @@ public class MainActivity extends Activity {
         updateBtn.setBackground(roundButton(false));
         updateBtn.setClickable(true);
         updateBtn.setFocusable(true);
+        iconLeft(updateBtn, R.drawable.ic_refresh, TXT); // SPEC-043
         updateBtn.setOnClickListener(v -> onUpdateAction());
         // 实测 H96 Android 12：可聚焦 TextView 不响应 OK/ENTER 的默认点击，
         // 遥控器按 OK 时由这里显式触发点击（实体遥控与按键注入都走这条路径）
-        updateBtn.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() == KeyEvent.ACTION_UP
-                    && (keyCode == KeyEvent.KEYCODE_ENTER
-                    || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
-                v.performClick();
-                return true;
-            }
-            return false;
-        });
+        bindKey(updateBtn, updateBtn::performClick);
         updateBtn.setOnFocusChangeListener((v, focused) -> {
             updateBtn.setBackground(roundButton(focused));
             updateBtn.setTextColor(focused ? 0xFFFFFFFF : TXT);
+            tintLeftIcon(updateBtn, focused ? 0xFFFFFFFF : TXT); // SPEC-043
         });
         updateCard.addView(updateBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // 遥控焦点链由 updateFocusChain 按行尾按钮的显示状态动态生成，
+        // 不依赖默认的几何焦点搜索（宽屏双栏时容易跳错列）
+        a11yView.setId(View.generateViewId());
+        a11yBtn.setId(View.generateViewId());
+        injectView.setId(View.generateViewId());
+        adbView.setId(View.generateViewId());
+        adbBtn.setId(View.generateViewId());
+        updateBtn.setId(View.generateViewId());
+        // 行内左右：文字行 <-> 行尾「去开启」
+        a11yView.setNextFocusRightId(a11yBtn.getId());
+        a11yBtn.setNextFocusLeftId(a11yView.getId());
+        adbView.setNextFocusRightId(adbBtn.getId());
+        adbBtn.setNextFocusLeftId(adbView.getId());
+        updateFocusChain();
 
         TextView tip = new TextView(this);
         tip.setText(getString(R.string.ui_tip));
@@ -379,12 +463,91 @@ public class MainActivity extends Activity {
     private void bindRow(final TextView v, final Runnable action) {
         v.setClickable(true);
         v.setFocusable(true);
+        focusableRow(v);
         v.setOnClickListener(x -> action.run());
+        bindKey(v, action);
+    }
+
+    /** 可聚焦行统一内边距 + 焦点底色：否则遥控导航时看不出当前选中的是哪一行 */
+    private void focusableRow(final TextView v) {
+        v.setPadding(dp(10), dp(7), dp(10), dp(7));
+        v.setBackground(rowBg(false));
+        v.setOnFocusChangeListener((x, focused) -> v.setBackground(rowBg(focused)));
+    }
+
+    private GradientDrawable rowBg(boolean focused) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(focused ? SURFACE2 : 0x00000000);
+        g.setCornerRadius(dp(8));
+        return g;
+    }
+
+    /** 状态行 + 行尾按钮：文字占满剩余宽度，按钮靠右并垂直居中 */
+    private View rowWrap(TextView row, TextView btn) {
+        LinearLayout w = new LinearLayout(this);
+        w.setOrientation(LinearLayout.HORIZONTAL);
+        w.setGravity(Gravity.CENTER_VERTICAL);
+        w.addView(row, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.leftMargin = dp(8);
+        w.addView(btn, bp);
+        return w;
+    }
+
+    /** 行尾小按钮（默认隐藏）：遥控可聚焦，OK/ENTER 显式触发点击 */
+    private TextView pill(int textRes, Runnable action) {
+        TextView v = new TextView(this);
+        v.setText(textRes);
+        v.setTextSize(12);
+        v.setTextColor(ACCENT);
+        v.setGravity(Gravity.CENTER);
+        v.setPadding(dp(12), dp(4), dp(12), dp(4));
+        v.setBackground(pillBg(false));
+        v.setClickable(true);
+        v.setFocusable(true);
+        v.setVisibility(View.GONE);
+        v.setOnClickListener(x -> action.run());
+        bindKey(v, action);
+        v.setOnFocusChangeListener((x, focused) -> {
+            v.setBackground(pillBg(focused));
+            v.setTextColor(focused ? 0xFFFFFFFF : ACCENT);
+        });
+        return v;
+    }
+
+    private GradientDrawable pillBg(boolean focused) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(focused ? ACCENT : SURFACE2);
+        g.setCornerRadius(dp(999));
+        return g;
+    }
+
+    /**
+     * 按行尾按钮当前是否显示重建上下焦点链：
+     * 无障碍 → 去开启 → 注入模式 → ADB 调试 → 去开启 → 检查更新。
+     */
+    private void updateFocusChain() {
+        TextView[] chain = {a11yView, a11yBtn, injectView, adbView, adbBtn, updateBtn};
+        TextView prev = null;
+        for (TextView v : chain) {
+            if (v.getVisibility() != View.VISIBLE) continue;
+            if (prev != null) {
+                prev.setNextFocusDownId(v.getId());
+                v.setNextFocusUpId(prev.getId());
+            }
+            prev = v;
+        }
+    }
+
+    /** 通用辅助：盒子端 TextView 需显式监听 OK/ENTER 才会触发 onClick */
+    private void bindKey(View v, Runnable action) {
         v.setOnKeyListener((view, keyCode, event) -> {
             if (event.getAction() == KeyEvent.ACTION_UP
                     && (keyCode == KeyEvent.KEYCODE_ENTER
                     || keyCode == KeyEvent.KEYCODE_DPAD_CENTER)) {
-                view.performClick();
+                action.run();
                 return true;
             }
             return false;
@@ -413,12 +576,12 @@ public class MainActivity extends Activity {
         if (!AdbShell.enabled(this)) AdbShell.setEnabled(this, true);
         if (AdbShell.hasSecureWrite(this) && AdbShell.enableAdb(this)) {
             adbView.setText(R.string.ui_adb_on);
-            adbView.setTextColor(GREEN);
+            setRowColor(adbView, GREEN);
             probeAdb();
             return;
         }
         adbView.setText(R.string.ui_adb_manual);
-        adbView.setTextColor(RED);
+        setRowColor(adbView, RED);
         openDevSettings();
     }
 
@@ -456,17 +619,18 @@ public class MainActivity extends Activity {
     private void updateInjectRows(boolean adbMode) {
         injectView.setText(adbMode ? R.string.ui_inject_adb : R.string.ui_inject_a11y);
         injectView.setTextColor(adbMode ? ACCENT : SUB);
+        tintLeftIcon(injectView, adbMode ? ACCENT : SUB); // SPEC-043
         if (!adbMode) {
             adbView.setText(R.string.ui_adb_off);
-            adbView.setTextColor(SUB);
+            setRowColor(adbView, SUB);
             return;
         }
         boolean connected = AdbShell.isConnected();
         adbView.setText(connected ? R.string.ui_adb_connected : R.string.ui_adb_disconnected);
-        adbView.setTextColor(connected ? GREEN : RED);
+        setRowColor(adbView, connected ? GREEN : RED);
     }
 
-    // ---------------- OTA 更新（SPEC-017） ----------------
+    // ---------------- OTA 更新（SPEC-017 / SPEC-027 / SPEC-030） ----------------
 
     /** 按钮语义：有待安装版本则下载安装，否则重新检查 */
     private void onUpdateAction() {
@@ -477,10 +641,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** SPEC-027：启动后后台静默探测，有新版本时点亮更新卡；失败静默不打扰 */
+    private void autoCheckUpdate() {
+        new Thread(() -> {
+            try {
+                final Updater.Release r = Updater.fetchLatest(this);
+                final String cur = Updater.currentVersion(this);
+                final boolean newer = Updater.isNewer(r.tag, cur);
+                runOnUiThread(() -> {
+                    setLastCheckNow();
+                    if (newer) {
+                        pendingUpdate = r;
+                        updateView.setText(getString(R.string.ui_update_found,
+                                Updater.displayVersion(r.tag), cur));
+                        setUpdateButton(R.string.ui_update_download);
+                        savePendingTag(r.tag);
+                        focusUpdateIfIdle();
+                    }
+                });
+            } catch (Exception ignored) {
+                // 静默失败，下次 tick 定时检查时仍会重试
+                setLastCheckNow();
+            }
+        }).start();
+    }
+
     private void checkUpdate() {
         pendingUpdate = null;
         updateView.setText(R.string.ui_update_checking);
-        updateBtn.setText(R.string.ui_update_check);
+        setUpdateButton(R.string.ui_update_check);
         setUpdateEnabled(false);
         new Thread(() -> {
             try {
@@ -488,22 +677,26 @@ public class MainActivity extends Activity {
                 final String cur = Updater.currentVersion(this);
                 final boolean newer = Updater.isNewer(r.tag, cur);
                 runOnUiThread(() -> {
+                    setLastCheckNow();
                     pendingUpdate = newer ? r : null;
                     if (newer) {
                         updateView.setText(getString(R.string.ui_update_found,
                                 Updater.displayVersion(r.tag), cur));
-                        updateBtn.setText(R.string.ui_update_download);
+                        setUpdateButton(R.string.ui_update_download);
+                        savePendingTag(r.tag);
                     } else {
                         updateView.setText(getString(R.string.ui_update_latest, cur));
-                        updateBtn.setText(R.string.ui_update_check);
+                        setUpdateButton(R.string.ui_update_check);
+                        clearPendingTag();
                     }
                     setUpdateEnabled(true);
                 });
             } catch (Exception e) {
                 final String msg = e.getMessage() == null ? "" : e.getMessage();
                 runOnUiThread(() -> {
+                    setLastCheckNow();
                     updateView.setText(getString(R.string.ui_update_failed, msg));
-                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateButton(R.string.ui_update_check);
                     setUpdateEnabled(true);
                 });
             }
@@ -513,12 +706,14 @@ public class MainActivity extends Activity {
     private void downloadUpdate(final Updater.Release r) {
         updateView.setText(R.string.ui_update_downloading);
         setUpdateEnabled(false);
+        // 开始下载时清除 SP 缓存的 pending tag，下载完成后若要重新检查会再次 fetchLatest
+        clearPendingTag();
         new Thread(() -> {
             try {
                 final File apk = Updater.download(this, r);
                 runOnUiThread(() -> {
                     pendingUpdate = null;
-                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateButton(R.string.ui_update_check);
                     setUpdateEnabled(true);
                     boolean submitted = Updater.install(this, apk);
                     updateView.setText(submitted
@@ -528,7 +723,7 @@ public class MainActivity extends Activity {
                 final String msg = e.getMessage() == null ? "" : e.getMessage();
                 runOnUiThread(() -> {
                     updateView.setText(getString(R.string.ui_update_failed, msg));
-                    updateBtn.setText(R.string.ui_update_check);
+                    setUpdateButton(R.string.ui_update_check);
                     setUpdateEnabled(true);
                 });
             }
@@ -538,6 +733,35 @@ public class MainActivity extends Activity {
     private void setUpdateEnabled(boolean on) {
         updateBtn.setEnabled(on);
         updateBtn.setAlpha(on ? 1f : 0.45f);
+    }
+
+    /** 后台探测到新版本时，若用户还没在界面上导航，就把焦点移到下载按钮，起到提醒作用 */
+    private void focusUpdateIfIdle() {
+        View cur = getCurrentFocus();
+        if (cur == null || cur == updateBtn) updateBtn.requestFocus();
+    }
+
+    // ---------------- OTA SP 读写辅助 ----------------
+
+    private SharedPreferences sp() {
+        return getSharedPreferences(SP_NAME, MODE_PRIVATE);
+    }
+
+    private void setLastCheckNow() {
+        sp().edit().putLong(SP_LAST_CHECK, System.currentTimeMillis()).apply();
+    }
+
+    private boolean shouldTickCheck() {
+        long last = sp().getLong(SP_LAST_CHECK, 0);
+        return System.currentTimeMillis() - last >= CHECK_INTERVAL_MS;
+    }
+
+    private void savePendingTag(String tag) {
+        sp().edit().putString(SP_PENDING_TAG, tag).apply();
+    }
+
+    private void clearPendingTag() {
+        sp().edit().remove(SP_PENDING_TAG).apply();
     }
 
     private void tick() {
@@ -551,12 +775,18 @@ public class MainActivity extends Activity {
         statusView.setText(getString(R.string.ui_running));
         boolean a11y = TvRemoteAccessibilityService.isReady();
         a11yView.setText(getString(a11y ? R.string.ui_a11y_ok : R.string.ui_a11y_missing));
-        a11yView.setTextColor(a11y ? GREEN : RED);
+        setRowColor(a11yView, a11y ? GREEN : RED);
         // SPEC-039：注入模式与 ADB 连接状态；ADB 模式下未连通时在后台重试
         boolean adbMode = AdbShell.enabled(this);
         updateInjectRows(adbMode);
+        // 未开启时才显示行尾「去开启」，并根据显隐重建遥控焦点链
+        a11yBtn.setVisibility(a11y ? View.GONE : View.VISIBLE);
+        adbBtn.setVisibility(AdbShell.isConnected() ? View.GONE : View.VISIBLE);
+        updateFocusChain();
         if (adbMode && !AdbShell.isConnected() && !probing) probeAdb();
         updateGuardRow();
+        // SPEC-027：盒子长时间前台驻留也会 24h 重新探测一次 OTA
+        if (shouldTickCheck() && pendingUpdate == null) autoCheckUpdate();
         h.postDelayed(this::tick, 3000);
     }
 
@@ -636,10 +866,16 @@ public class MainActivity extends Activity {
         return bmp;
     }
 
-    /** SPEC-014：跳到系统无障碍设置，用户在那里开启本应用的服务 */
+    /**
+     * SPEC-014：跳到系统无障碍设置，用户在那里开启本应用的服务。
+     * 本固件同时装有 com.android.settings 与 com.android.tv.settings 两个处理者，
+     * 不指定包名会先弹「选择要使用的应用」；TV 版页面为空壳，故固定走 com.android.settings
+     * （其无障碍页首个条目即本应用，遥控按一次 OK 就进入开关页）。
+     */
     private void openA11ySettings() {
         try {
             Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            i.setPackage("com.android.settings");
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
         } catch (Exception ignored) {

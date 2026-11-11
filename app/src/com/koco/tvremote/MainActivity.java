@@ -16,10 +16,14 @@ import android.content.res.Configuration;
 import android.os.LocaleList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.graphics.PorterDuff;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -33,7 +37,10 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ReplacementSpan;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -99,6 +106,13 @@ public class MainActivity extends Activity {
     private GradientDrawable dotBg;
     private LanClient lan;
     private boolean lanMode = false;
+    // SPEC-042：按钮所需通道；ANY 表示直连、蓝牙都可用
+    private static final String CH_LAN = "lan", CH_BT = "bt", CH_ANY = "any";
+    /** 因通道不匹配而暂存的动作；同一时刻只保留最后一次点击 */
+    private Runnable pendingAction;
+    private String pendingWant;
+    /** 未连接时首次按下 OK 已排队补发短按，抬手不再重复发送 */
+    private boolean okQueued = false;
     // SPEC-036：扫码配对（相机 + ZXing）
     private static final int RC_CAMERA = 101, RC_BT_SCAN_PERM = 102, RC_BT_ENABLE = 103;
     /** SPEC-040：选择本地 APK 文件 */
@@ -549,7 +563,7 @@ public class MainActivity extends Activity {
         seg.setPadding(dp(3), dp(3), dp(3), dp(3));
         seg.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        modeLan = segBtn(getString(R.string.mode_lan));
+        modeLan = segBtn(getString(R.string.mode_lan), R.drawable.ic_link);
         modeLan.setOnClickListener(v -> selectMode("lan"));
         // 长按直连段 = 清除当前设备的配对信息，重新配对（盒子重置或换盒子时用）
         modeLan.setOnLongClickListener(v -> {
@@ -561,7 +575,7 @@ public class MainActivity extends Activity {
             showLanDialog();
             return true;
         });
-        modeBt = segBtn(getString(R.string.mode_bt));
+        modeBt = segBtn(getString(R.string.mode_bt), R.drawable.ic_bluetooth);
         modeBt.setOnClickListener(v -> selectMode("bt"));
 
         LinearLayout.LayoutParams sp1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
@@ -570,8 +584,9 @@ public class MainActivity extends Activity {
         seg.addView(modeBt, new LinearLayout.LayoutParams(0, dp(34), 1f));
         bar.addView(seg);
 
-        bar.addView(flat(getString(R.string.scan), v -> startScan()));
-        bar.addView(flat(getString(R.string.add), v -> showAddDialog()));
+        // SPEC-043：顶栏空间有限，扫描/添加用纯图标按钮
+        bar.addView(iconOnly(R.drawable.ic_scan, R.string.scan, SUB, v -> startScan()));
+        bar.addView(iconOnly(R.drawable.ic_add, R.string.add, SUB, v -> showAddDialog()));
         return bar;
     }
 
@@ -606,11 +621,11 @@ public class MainActivity extends Activity {
         seg.setBackground(round(DIM, 999, 0));
         seg.setPadding(dp(3), dp(3), dp(3), dp(3));
 
-        inputDpad = segBtn(getString(R.string.input_dpad));
+        inputDpad = segBtn(getString(R.string.input_dpad), R.drawable.ic_dpad);
         inputDpad.setOnClickListener(v -> setInputMode(INPUT_DPAD));
-        inputTouchBtn = segBtn(getString(R.string.input_touch));
+        inputTouchBtn = segBtn(getString(R.string.input_touch), R.drawable.ic_touch);
         inputTouchBtn.setOnClickListener(v -> setInputMode(INPUT_TOUCH));
-        inputMouseBtn = segBtn(getString(R.string.input_mouse));
+        inputMouseBtn = segBtn(getString(R.string.input_mouse), R.drawable.ic_mouse);
         inputMouseBtn.setOnClickListener(v -> setInputMode(INPUT_MOUSE));
 
         LinearLayout.LayoutParams p1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
@@ -707,9 +722,9 @@ public class MainActivity extends Activity {
     /** 切换输入方式：触控板互斥飞鼠，方向盘保留原按键布局 */
     private void setInputMode(String mode) {
         boolean touchpad = !INPUT_DPAD.equals(mode);
-        // SPEC-029：蓝牙 HID 不支持触控板的两种模式
-        if (touchpad && btMode) {
-            setStatus(getString(R.string.touchpad_lan_only), false);
+        // SPEC-042：触控板只有直连支持，通道不匹配时自动切换后再进入
+        if (touchpad && !lanMode) {
+            ensureChannel(CH_LAN, () -> setInputMode(mode));
             return;
         }
         inputTouchpad = touchpad;
@@ -812,7 +827,7 @@ public class MainActivity extends Activity {
                     okDownAt = SystemClock.uptimeMillis();
                     okLongFired = false;
                     okDown();
-                    if (lanMode && !airMouse) ui.postDelayed(okLongTask, LONG_PRESS_MS);
+                    if (lanMode && !airMouse && !okQueued) ui.postDelayed(okLongTask, LONG_PRESS_MS);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     return true;
@@ -899,7 +914,8 @@ public class MainActivity extends Activity {
             ui.postDelayed(r, LONG_PRESS_MS);
             return;
         }
-        setStatus(getString(R.string.select_mode_first), false);
+        // SPEC-042：都未连接时自动进入记忆通道，只补发一次短按，不启动连发
+        ensureChannel(CH_ANY, () -> sendKey(code));
     }
 
     /** SPEC-041：方向盘抬起。蓝牙释放按键；直连停止连发任务 */
@@ -942,7 +958,7 @@ public class MainActivity extends Activity {
         r.addView(cell(circleKey("←", 4, sysIcon, TXT)), gridCol());
         r.addView(cell(circleKey("⌂", 3, sysIcon, TXT)), gridCol());
         r.addView(cell(circleKey("≡", 82, sysIcon, TXT)), gridCol());
-        r.addView(cell(circleKey(getString(R.string.key_power), 26, 11, POWER)), gridCol());
+        r.addView(cell(circleIconKey(R.drawable.ic_power, R.string.key_power, 26, POWER)), gridCol());
         return r;
     }
 
@@ -971,7 +987,7 @@ public class MainActivity extends Activity {
         plp.leftMargin = inset;
         r.addView(pill, plp);
 
-        r.addView(cell(circleKey(getString(R.string.key_mute), 164, 11, TXT)), gridCol());
+        r.addView(cell(circleIconKey(R.drawable.ic_mute, R.string.key_mute, 164, TXT)), gridCol());
         return r;
     }
 
@@ -1006,13 +1022,9 @@ public class MainActivity extends Activity {
             return;
         }
         // 直连没有移动系统光标的能力，飞鼠只在蓝牙 HID 模式可用
-        if (!btMode) {
-            setStatus(getString(R.string.air_need_bt), false);
-            return;
-        }
-        // 已注册 HID 但未连上盒子时，sendReport 没有目标，飞鼠会静默不动
-        if (bt == null || !bt.isReady() || bt.connectedDevice() == null) {
-            setStatus(getString(R.string.bt_not_ready), false);
+        // SPEC-042：通道不匹配时自动切蓝牙，连上后再开启飞鼠
+        if (!btMode || bt == null || !bt.isReady() || bt.connectedDevice() == null) {
+            ensureChannel(CH_BT, this::toggleAirMouse);
             return;
         }
         if (sensorManager == null) {
@@ -1120,7 +1132,7 @@ public class MainActivity extends Activity {
     }
 
     /** 把定宽圆键包进居中 cell（等宽分布用） */
-    private FrameLayout cell(TextView key) {
+    private FrameLayout cell(View key) {
         FrameLayout c = new FrameLayout(this);
         c.addView(key, new FrameLayout.LayoutParams(dp(sysLen), dp(sysLen), Gravity.CENTER));
         return c;
@@ -1150,6 +1162,7 @@ public class MainActivity extends Activity {
         send.setTextSize(15);
         send.setGravity(Gravity.CENTER);
         send.setBackground(rippleGrad(999));
+        iconLeft(send, R.drawable.ic_send, Color.WHITE); // SPEC-043
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(76), dp(keyH));
         slp.leftMargin = dp(8);
         send.setLayoutParams(slp);
@@ -1179,6 +1192,7 @@ public class MainActivity extends Activity {
         pickBtn.setGravity(Gravity.CENTER);
         pickBtn.setBackground(rippleGrad(999));
         pickBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
+        iconLeft(pickBtn, R.drawable.ic_file, Color.WHITE); // SPEC-043
         pickBtn.setOnClickListener(v -> {
             haptic();
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -1211,6 +1225,7 @@ public class MainActivity extends Activity {
         send.setTextSize(14);
         send.setGravity(Gravity.CENTER);
         send.setBackground(rippleGrad(999));
+        iconLeft(send, R.drawable.ic_send, Color.WHITE); // SPEC-043
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(dp(76), dp(keyH));
         slp.leftMargin = dp(8);
         send.setLayoutParams(slp);
@@ -1228,28 +1243,26 @@ public class MainActivity extends Activity {
 
     /** SPEC-040：发送 APK 下载链接到盒子 */
     private void doApkUrl(final String url) {
-        if (lan == null) {
-            setStatus(getString(R.string.apk_need_lan), false);
-            return;
-        }
-        new Thread(() -> {
+        // SPEC-042：APK 推送只有直连支持，通道不匹配时自动切换后再发送
+        ensureChannel(CH_LAN, () -> new Thread(() -> {
             try {
                 lan.installApkUrl(url);
                 runOnUiThread(() -> setStatus(getString(R.string.apk_url_sent), true));
             } catch (Exception e) {
                 runOnUiThread(() -> setStatus(getString(R.string.apk_url_fail, e.getMessage()), false));
             }
-        }, "apk-url").start();
+        }, "apk-url").start());
     }
 
     /** SPEC-040：上传选中的 APK 文件到盒子 */
     private void uploadApk(android.net.Uri uri) {
+        // SPEC-042：APK 上传只有直连支持，通道不匹配时自动切换后再上传
+        ensureChannel(CH_LAN, () -> startApkUpload(uri));
+    }
+
+    private void startApkUpload(android.net.Uri uri) {
         final String host = curHost();
         final String tok = tokenOf(host);
-        if (tok.isEmpty()) {
-            setStatus(getString(R.string.apk_need_lan), false);
-            return;
-        }
         setStatus(getString(R.string.apk_uploading), true);
         new Thread(() -> {
             java.net.HttpURLConnection conn = null;
@@ -1482,21 +1495,89 @@ public class MainActivity extends Activity {
         return p;
     }
 
-    private TextView segBtn(String label) {
+    private TextView segBtn(String label, int iconRes) {
         TextView t = new TextView(this);
         t.setText(label);
         t.setTextSize(13);
         t.setGravity(Gravity.CENTER);
+        t.setTag(iconRes); // SPEC-043：applySeg 据此同步图标颜色
+        iconLeft(t, iconRes, SUB);
         return t;
     }
 
-    private TextView flat(String label, View.OnClickListener l) {
+    /** SPEC-043：生成指定尺寸与颜色的图标 drawable */
+    private Drawable iconDrawable(int res, int sizeDp, int color) {
+        Drawable d = getResources().getDrawable(res, getTheme()).mutate();
+        d.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+        d.setBounds(0, 0, dp(sizeDp), dp(sizeDp));
+        return d;
+    }
+
+    /** SPEC-043：文字左侧图标，颜色与文字一致。
+     *  用行内 ReplacementSpan 而不是 compound drawable：TextView 居中时左 drawable 会贴到控件最左边。 */
+    private void iconLeft(TextView v, int res, int color) {
+        CharSequence cur = v.getText();
+        String plain = cur == null ? "" : cur.toString();
+        // 去掉上一次插入的图标占位，避免反复调用时累积
+        if (plain.startsWith(ICON_PLACEHOLDER)) plain = plain.substring(1);
+        SpannableString s = new SpannableString(ICON_PLACEHOLDER + plain);
+        s.setSpan(new IconSpan(iconDrawable(res, 16, color), dp(16), dp(5)),
+                0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        v.setText(s);
+    }
+
+    /** 行内图标占位符（对象替换符，不参与显示） */
+    private static final String ICON_PLACEHOLDER = "\uFFFC";
+
+    /** SPEC-043：宽度参与排版的图标 span，图标与文字始终紧邻且整体居中 */
+    private static class IconSpan extends ReplacementSpan {
+        private final Drawable d;
+        private final int size, gap;
+
+        IconSpan(Drawable d, int size, int gap) {
+            this.d = d;
+            this.size = size;
+            this.gap = gap;
+        }
+
+        @Override
+        public int getSize(Paint paint, CharSequence text, int start, int end,
+                           Paint.FontMetricsInt fm) {
+            return size + gap;
+        }
+
+        @Override
+        public void draw(Canvas c, CharSequence text, int start, int end, float x, int top,
+                         int y, int bottom, Paint paint) {
+            int center = y + (int) ((paint.ascent() + paint.descent()) / 2);
+            d.setBounds((int) x, center - size / 2, (int) x + size, center + size / 2);
+            d.draw(c);
+        }
+    }
+
+    /** SPEC-043：纯图标按钮；contentDescription 提供无障碍名称 */
+    private TextView iconOnly(int res, int descRes, int color, View.OnClickListener l) {
         TextView t = new TextView(this);
-        t.setText(label);
-        t.setTextColor(SUB);
-        t.setTextSize(13);
-        t.setPadding(dp(10), dp(6), dp(4), dp(6));
+        t.setContentDescription(getString(descRes));
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(8), dp(6), dp(8), dp(6));
+        t.setCompoundDrawables(iconDrawable(res, 20, color), null, null, null);
         t.setOnClickListener(l);
+        return t;
+    }
+
+    /** SPEC-043：圆形纯图标键，交互与 circleKey 一致。
+     *  用 ImageView 而不是 TextView + compound drawable：后者在空文案时图标会偏到左上，不在圆心。 */
+    private ImageView circleIconKey(int res, int descRes, int code, int color) {
+        ImageView t = new ImageView(this);
+        t.setContentDescription(getString(descRes));
+        t.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        // 图标固定 16dp，与左侧圆键的文字图标观感一致
+        int pad = Math.max(0, (sysLen - 16) / 2);
+        t.setPadding(dp(pad), dp(pad), dp(pad), dp(pad));
+        t.setImageDrawable(iconDrawable(res, 16, color));
+        t.setBackground(ripple(SURFACE2, sysLen / 2f, 0));
+        t.setOnClickListener(v -> press(code));
         return t;
     }
 
@@ -1554,6 +1635,7 @@ public class MainActivity extends Activity {
         btn.setGravity(Gravity.CENTER);
         btn.setBackground(ripple(SURFACE2, 999, 0));
         btn.setPadding(dp(14), dp(7), dp(14), dp(7));
+        iconLeft(btn, R.drawable.ic_refresh, TXT); // SPEC-043
         btn.setOnClickListener(v -> checkUpdate());
         l.addView(btn);
         return l;
@@ -1815,6 +1897,7 @@ public class MainActivity extends Activity {
 
     /** 模式选择入口：lan=直连（当前设备未配对则弹配对框），bt=蓝牙 HID */
     private void selectMode(String m) {
+        clearPending(null); // SPEC-042：用户显式选模式，丢弃之前排队的按钮动作
         if (m.equals("lan")) {
             if (!tokenOf(curHost()).isEmpty()) enableLan();
             else showLanDialog();
@@ -1823,8 +1906,61 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** SPEC-042：记录一次等待通道就绪的动作；新点击覆盖旧动作 */
+    private void setPending(String want, Runnable action) {
+        pendingWant = want;
+        pendingAction = action;
+    }
+
+    /** SPEC-042：丢弃暂存动作；want 为 null 时清全部 */
+    private void clearPending(String want) {
+        if (want == null || want.equals(pendingWant)) {
+            pendingWant = null;
+            pendingAction = null;
+        }
+    }
+
+    /** SPEC-042：通道就绪后执行暂存动作；先清空，避免回调重入导致重复执行 */
+    private void runPending(String want) {
+        if (pendingAction == null || !want.equals(pendingWant)) return;
+        Runnable r = pendingAction;
+        clearPending(null);
+        r.run();
+    }
+
+    /**
+     * SPEC-042：在指定通道上执行动作。
+     * 已就绪立即执行；未连接先切换；需要配对/选设备时排队，等连接成功回调再执行。
+     */
+    private void ensureChannel(String want, Runnable action) {
+        String target = CH_ANY.equals(want)
+                ? (lanMode ? CH_LAN : btMode ? CH_BT : modeOf(curHost()))
+                : want;
+        if (CH_LAN.equals(target)) {
+            if (lanMode && lan != null) {
+                action.run();
+                return;
+            }
+            if (tokenOf(curHost()).isEmpty()) {
+                setPending(CH_LAN, action);
+                showLanDialog();
+                return;
+            }
+            enableLan();
+            action.run();
+            return;
+        }
+        if (btMode && bt != null && bt.isReady() && bt.connectedDevice() != null) {
+            action.run();
+            return;
+        }
+        setPending(CH_BT, action);
+        startBt();
+    }
+
     /** 当前设备已配对：直接启用直连模式，控制目标 = 当前设备 */
     private void enableLan() {
+        clearPending(null); // SPEC-042：显式切直连，以本次操作为准
         stopTouchpad(); // SPEC-023：先释放按压再切换直连目标
         if (btMode && bt != null) bt.disconnect();
         stopAirMouse(); // SPEC-018：飞鼠只在蓝牙模式可用
@@ -1840,6 +1976,7 @@ public class MainActivity extends Activity {
 
     /** SPEC-015：切换/启动设备时，按该设备上次成功使用的方式恢复连接 */
     private void applyDeviceMode() {
+        clearPending(null); // SPEC-042：切设备后旧设备的排队动作不再执行
         String mode = modeOf(curHost());
         stopTouchpad(); // SPEC-023：切设备前先停止触控板，避免命令发到新设备
         stopAirMouse(); // SPEC-018：切设备时退出飞鼠，避免对着旧盒子移动光标
@@ -1863,9 +2000,7 @@ public class MainActivity extends Activity {
         if (modeLan == null) return;
         applySeg(modeLan, lanMode);
         applySeg(modeBt, btMode);
-        // SPEC-029：蓝牙 HID 不支持触控板的两种模式，两段按钮置灰
-        if (inputTouchBtn != null) inputTouchBtn.setAlpha(btMode ? 0.45f : 1f);
-        if (inputMouseBtn != null) inputMouseBtn.setAlpha(btMode ? 0.45f : 1f);
+        // SPEC-042：蓝牙档点触摸/鼠标会自动切直连，不再置灰（SPEC-029 的限制已由自动切换消除）
         if (btMode && inputTouchpad) {
             setInputMode(INPUT_DPAD);
             setStatus(getString(R.string.touchpad_lan_only), false);
@@ -1875,6 +2010,10 @@ public class MainActivity extends Activity {
     private void applySeg(TextView t, boolean on) {
         t.setBackground(on ? rippleGrad(999) : null);
         t.setTextColor(on ? Color.WHITE : SUB);
+        // SPEC-043：选中/未选中时图标与文字同步变色
+        if (t.getTag() instanceof Integer) {
+            iconLeft(t, (Integer) t.getTag(), on ? Color.WHITE : SUB);
+        }
     }
 
     // ---------------- 遥控逻辑 ----------------
@@ -1887,6 +2026,12 @@ public class MainActivity extends Activity {
 
     private void press(int code) {
         haptic();
+        // SPEC-042：两边通用的按键按当前通道发送；都未连接时自动进入记忆通道
+        ensureChannel(CH_ANY, () -> sendKey(code));
+    }
+
+    /** SPEC-042：通道已确定后发送一次按键 */
+    private void sendKey(int code) {
         if (lanMode) {
             lanPress(code);
             return;
@@ -1912,11 +2057,20 @@ public class MainActivity extends Activity {
                 return;
             }
             btSend(bt.sendKeyDown(BtHid.K_ENTER));
+            return;
         }
-        // 直连：协议只有一次性命令，抬手时再按按住时长选 KEY 或 KEYLONG
+        if (lanMode) return; // 直连：抬手时再按按住时长选 KEY 或 KEYLONG
+        // SPEC-042：都未连接时进入记忆通道，只补发一次短按；抬手不再重复发送
+        okQueued = true;
+        ensureChannel(CH_ANY, () -> sendKey(23));
     }
 
     private void okUp(long heldMs) {
+        // SPEC-042：首次按下时已排队补发短按，抬手直接结束
+        if (okQueued) {
+            okQueued = false;
+            return;
+        }
         if (airMouse) {
             if (bt != null) bt.sendMouseButton(0);
             return;
@@ -1934,6 +2088,7 @@ public class MainActivity extends Activity {
     }
 
     private void okCancel() {
+        okQueued = false;
         if (airMouse) {
             if (bt != null) bt.sendMouseButton(0);
             return;
@@ -1996,6 +2151,7 @@ public class MainActivity extends Activity {
     }
 
     private void switchTo(int idx) {
+        clearPending(null); // SPEC-042：切设备后旧设备的排队动作不再执行
         cur = idx;
         devName.setText(devices.get(cur)[0] + "  ▾");
         saveDevices();
@@ -2020,6 +2176,7 @@ public class MainActivity extends Activity {
     }
 
     private void removeCurrent() {
+        clearPending(null); // SPEC-042：删设备后排队动作不再执行
         if (devices.size() <= 1) {
             Toast.makeText(this, getString(R.string.keep_one_device), Toast.LENGTH_SHORT).show();
             return;
@@ -2096,7 +2253,8 @@ public class MainActivity extends Activity {
                 .action(getString(R.string.lan_discover), false, SUB, () -> doDiscover())
                 // SPEC-036：二维码通常由盒子端界面直接显示，扫码比手输更快
                 .action(getString(R.string.lan_scan), false, ACCENT, this::showQrScan)
-                .action(getString(R.string.cancel), false, SUB)
+                // SPEC-042：取消配对则丢弃等待直连的按钮动作
+                .action(getString(R.string.cancel), false, SUB, () -> clearPending(CH_LAN))
                 .action(getString(R.string.lan_pair), true, SUB, () ->
                         doPair(ip.getText().toString().trim(), code.getText().toString().trim()))
                 .show();
@@ -2196,9 +2354,13 @@ public class MainActivity extends Activity {
                     setStatus(getString(R.string.paired, h), true);
                     ensureApps();
                     if (inputTouchpad) startTouchpad();
+                    runPending(CH_LAN); // SPEC-042：执行等待直连的按钮动作
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> setStatus(Errors.friendly(this, e), false));
+                runOnUiThread(() -> {
+                    clearPending(CH_LAN); // SPEC-042：配对失败，丢弃排队的按钮动作
+                    setStatus(Errors.friendly(this, e), false);
+                });
             }
         });
     }
@@ -2251,7 +2413,8 @@ public class MainActivity extends Activity {
     }
 
     private void doText(final String t) {
-        if (lanMode && lan != null) {
+        // SPEC-042：文字注入只有直连支持，通道不匹配时自动切换后再发送
+        ensureChannel(CH_LAN, () -> {
             worker.submit(() -> {
                 try {
                     lan.text(t);
@@ -2260,14 +2423,12 @@ public class MainActivity extends Activity {
                     setStatus(Errors.friendly(this, e), false);
                 }
             });
-        } else {
-            // SPEC-013 FR-13-6：文字注入只有直连支持
-            setStatus(getString(R.string.direct_only), false);
-        }
+        });
     }
 
     private void doApp(final String pkg) {
-        if (lanMode && lan != null) {
+        // SPEC-042：远程启动应用只有直连支持，通道不匹配时自动切换后再启动
+        ensureChannel(CH_LAN, () -> {
             worker.submit(() -> {
                 try {
                     lan.launch(pkg);
@@ -2276,10 +2437,7 @@ public class MainActivity extends Activity {
                     setStatus(Errors.friendly(this, e), false);
                 }
             });
-        } else {
-            // SPEC-013 FR-13-6：远程启动应用只有直连支持
-            setStatus(getString(R.string.direct_only), false);
-        }
+        });
     }
 
     // ---------------- 蓝牙模式 ----------------
@@ -2296,6 +2454,7 @@ public class MainActivity extends Activity {
         stopTouchpad(); // SPEC-028：切蓝牙前结束触控板会话
         // Android 8.x 没有 HID Device API：点击时明确告知，模式按钮仍常显
         if (Build.VERSION.SDK_INT < 28) {
+            clearPending(CH_BT); // SPEC-042：无法切换，丢弃排队的按钮动作
             setStatus(getString(R.string.bt_not_supported), false);
             new Sheet(getString(R.string.bt_unsupported_title),
                     getString(R.string.bt_unsupported_msg,
@@ -2310,6 +2469,7 @@ public class MainActivity extends Activity {
             public void onSupport(final boolean ok, final String reason) {
                 runOnUiThread(() -> {
                     if (!ok) {
+                        clearPending(CH_BT); // SPEC-042：蓝牙不可用，丢弃排队的按钮动作
                         setStatus(getString(R.string.bt_unavailable, reason), false);
                         new Sheet(getString(R.string.bt_unsupported_title),
                                 getString(R.string.bt_unsupported_msg, reason, webAddrText()))
@@ -2333,8 +2493,10 @@ public class MainActivity extends Activity {
                         btMode = true;
                         updateModeUi();
                         connectSavedBtOrPick();
+                    } else {
+                        // 注册被系统注销（退后台）不算手机不支持，重新点蓝牙即可再注册
+                        clearPending(CH_BT); // SPEC-042：HID 注销后无法补发，丢弃排队动作
                     }
-                    // 注册被系统注销（退后台）不算手机不支持，重新点蓝牙即可再注册
                 });
             }
 
@@ -2351,14 +2513,21 @@ public class MainActivity extends Activity {
                         saveMode(curHost(), "bt");
                         saveBtAddr(curHost(), d.getAddress());
                         setStatus(getString(R.string.bt_connected, n), true);
+                        runPending(CH_BT); // SPEC-042：执行等待蓝牙的按钮动作
                         return;
                     }
+                    boolean pendingBt = CH_BT.equals(pendingWant) && pendingAction != null;
+                    clearPending(CH_BT); // SPEC-042：连接失败，丢弃排队的按钮动作
                     btMode = false;
                     stopTouchpad(); // SPEC-023：蓝牙断开时释放触控板按压
                     stopAirMouse(); // SPEC-018：蓝牙断开后退出飞鼠
                     updateModeUi();
                     // 切设备时主动断开旧目标，不覆盖新设备的直连状态文案
-                    if (!lanMode) setStatus(getString(R.string.bt_disconnected, n), false);
+                    if (!lanMode) {
+                        // SPEC-042：本次是为执行按钮动作而切蓝牙，失败时给可操作的短提示
+                        setStatus(getString(pendingBt ? R.string.bt_switch_failed
+                                : R.string.bt_disconnected, n), false);
+                    }
                 });
             }
         };
@@ -2402,7 +2571,8 @@ public class MainActivity extends Activity {
                     .action(getString(R.string.bt_scan_action), true, SUB, this::startBtDiscovery)
                     .action(getString(R.string.bt_discoverable), false, ACCENT,
                             this::requestDiscoverable)
-                    .action(getString(R.string.cancel), false, SUB)
+                    // SPEC-042：取消选设备则丢弃等待蓝牙的按钮动作
+                    .action(getString(R.string.cancel), false, SUB, () -> clearPending(CH_BT))
                     .show();
             return;
         }
@@ -2421,7 +2591,8 @@ public class MainActivity extends Activity {
         }
         sheet.action(getString(R.string.bt_scan_action), false, ACCENT,
                         this::startBtDiscovery)
-                .action(getString(R.string.cancel), false, SUB).show();
+                // SPEC-042：取消选设备则丢弃等待蓝牙的按钮动作
+                .action(getString(R.string.cancel), false, SUB, () -> clearPending(CH_BT)).show();
     }
 
     // ---------------- 蓝牙主动扫描与配对（SPEC-037） ----------------

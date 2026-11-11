@@ -175,7 +175,7 @@ button:active { transform: scale(.97); background: #243247; }
 .seg {
   display: flex;
   gap: 8px;
-  width: 236px;
+  width: 252px;
   margin: 8px auto 0;
 }
 
@@ -185,7 +185,14 @@ button:active { transform: scale(.97); background: #243247; }
   font-size: 13px;
   border-radius: 11px;
   color: var(--sub);
+  /* SPEC-043：图标 + 文字同排，不折行 */
+  white-space: nowrap;
+  gap: 4px;
+  padding: 0 4px;
 }
+
+/* 分段内图标略小，给两三个字的文案留出空间 */
+.seg .ico { width: 14px; height: 14px; }
 
 .seg button.on {
   color: #fff;
@@ -310,6 +317,21 @@ button:active { transform: scale(.97); background: #243247; }
 /* SPEC-025：电源键仅文字变红 */
 .row .power { color: var(--danger); }
 .row .power:active { color: #fff; }
+
+/* SPEC-043：按钮内联图标，颜色跟随文字 */
+.ico { width: 16px; height: 16px; flex: none; }
+
+.primary, .linkBtn, .seg button, .row button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* SPEC-043：320px 窄屏放不下电源/静音的图标加文字，只留图标（aria-label 已提供名称） */
+@media (max-width: 359px) {
+  .row .power span, .row .muteKey span { display: none; }
+}
 
 .inputRow {
   display: flex;
@@ -561,6 +583,6 @@ button:active { transform: scale(.97); background: #243247; }
   .dpad { width: 208px; height: 208px; }
   .touchpad { width: 100%; height: 208px; }
   .dpad .ok { width: 76px; height: 76px; }
-  .seg { width: 208px; }
+  .seg { width: 228px; }
   #devCode { width: 92px; }
 }

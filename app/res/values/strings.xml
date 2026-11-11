@@ -23,7 +23,6 @@
     <!-- 飞鼠（SPEC-018） -->
     <string name="air_on">飞鼠已开启：转动手机移动光标，OK 为左键</string>
     <string name="air_off">飞鼠已关闭</string>
-    <string name="air_need_bt">飞鼠需要蓝牙模式：直连无法移动盒子光标</string>
     <string name="air_no_sensor">这台手机没有陀螺仪，无法使用飞鼠</string>
 
     <!-- 触控板（SPEC-023） -->
@@ -71,7 +70,7 @@
     <string name="ip_code_required">IP 和配对码都要填</string>
     <string name="lan_not_paired">还没配对，点「直连」开始</string>
     <string name="select_mode_first">请先选择「直连」或「蓝牙」</string>
-    <string name="direct_only">这个功能需要直连模式：文字和应用只能通过盒子端服务发送</string>
+    <string name="bt_switch_failed">蓝牙没连上，请确认盒子蓝牙已开启</string>
     <string name="bt_not_supported">这台手机不支持蓝牙遥控，请用直连</string>
     <string name="bt_connecting">正在连接蓝牙 %1$s …</string>
     <string name="bt_send_failed">蓝牙发送失败：请重新点「蓝牙」连接盒子</string>
@@ -136,7 +135,6 @@
     <string name="apk_pick_file">选择 APK 文件</string>
     <string name="apk_url_hint">APK 下载链接（http/https）</string>
     <string name="apk_send_url">发送</string>
-    <string name="apk_need_lan">需要先直连配对盒子</string>
     <string name="apk_url_sent">已发送，盒子正在下载安装</string>
     <string name="apk_url_fail">发送失败：%1$s</string>
     <string name="apk_uploading">正在上传 APK…</string>

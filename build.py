@@ -125,7 +125,7 @@ def link_resources(extra, min_sdk):
            "--manifest", manifest_for(min_sdk),
            "--java", gendir,
            "--min-sdk-version", str(min_sdk), "--target-sdk-version", "30",
-           "--version-code", "16", "--version-name", "1.7.2"]
+           "--version-code", "23", "--version-name", "1.8.0"]
     if assets:
         cmd += ["-A", assets]
     run(cmd + extra)

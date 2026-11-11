@@ -21,9 +21,10 @@
     <string name="ui_inject_adb">Injection: ADB (OK to switch back)</string>
     <string name="ui_adb_connected">ADB debugging: connected (real key events, same as Bluetooth)</string>
     <string name="ui_adb_disconnected">ADB debugging: not connected (OK to open developer options)</string>
-    <string name="ui_adb_off">ADB debugging: off (OK to try enabling)</string>
+    <string name="ui_adb_off">ADB debugging: off</string>
     <string name="ui_adb_on">ADB debugging enabled, connecting…</string>
     <string name="ui_adb_manual">Turn on "Developer options → USB debugging / ADB debugging", then press OK here to connect</string>
+    <string name="ui_enable_now">Turn on</string>
     <string name="ui_guard_ok">Display guard: normal (%1$s)</string>
     <string name="ui_guard_healing">Display guard: abnormal %1$s, healing</string>
     <string name="ui_guard_manual">Display guard: %1$s not recovered, power-cycle the box</string>
