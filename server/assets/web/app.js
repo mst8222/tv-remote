@@ -171,6 +171,9 @@
 
   var devices = [];
   var current = '';
+  /* SPEC-042：因未配对/token 失效而等待续发的文字，只保留当前页面内的一次动作 */
+  var pendingText = '';
+  var pendingTextBase = '';
 
   function t(key) { return T[key] || key; }
 
@@ -411,6 +414,7 @@
       closeSheet();
       return;
     }
+    clearPendingText(); // SPEC-042：旧设备的文字不得事后发往新设备
     current = base;
     saveDevices();
     closeSheet();
@@ -428,6 +432,7 @@
   }
 
   function removeDevice(base) {
+    if (base === current || base === pendingTextBase) clearPendingText();
     devices = devices.filter(function (d) { return d.base !== base; });
     if (current === base) current = '';
     if (!current && devices.length) current = devices[0].base;
@@ -510,6 +515,39 @@
       if (!e || !e.auth) setOnline(false);
       return false;
     });
+  }
+
+  // ---------------- SPEC-042 文字保留与配对后续发 ----------------
+
+  function clearPendingText() {
+    pendingText = '';
+    pendingTextBase = '';
+  }
+
+  /** 发送文字；只有认证失败时保留待发动作，其他失败不自动重试 */
+  function sendText(value) {
+    var base = current || location.origin;
+    pendingText = value;
+    pendingTextBase = base;
+    command('/api/text', { text: value }).then(function (ok) {
+      // authFailed 会打开配对卡；此时保留动作，等同设备配对成功后续发
+      if (pendingText === value && pendingTextBase === base &&
+          (ok || $('#pairCard').hidden)) {
+        clearPendingText();
+      }
+      if (ok) {
+        var el = $('#text');
+        // 发送期间用户可能继续输入，只清理与本次发送原文一致的内容
+        if (el.value === value) el.value = '';
+        toast(t('sendOk'));
+      }
+    });
+  }
+
+  /** 同一设备重新配对成功后，直接续发暂存文字 */
+  function resumePendingText() {
+    if (!pendingText || pendingTextBase !== (current || location.origin)) return;
+    sendText(pendingText);
   }
 
   // SPEC-040：上传本地 APK 文件到盒子（raw body，不走 JSON）
@@ -609,6 +647,8 @@
             devices.push(d);
           }
           d.token = r.token;
+          // 通过「添加设备」改配到另一台时，丢弃旧设备的待发动作
+          if (pendingText && pendingTextBase !== base) clearPendingText();
           current = base;
           saveDevices();
           try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
@@ -616,6 +656,7 @@
           renderDevices();
           setOnline(true);
           loadApps();
+          resumePendingText(); // SPEC-042：同一设备重新配对后直接续发原文字
           return { ok: true };
         }
         if (r && r.err === 'locked') return { ok: false, err: 'locked' };
@@ -1287,12 +1328,9 @@
     bindHaptic($('#segPad'));
     bindHaptic($('#segMouse'));
     $('#sendBtn').addEventListener('click', function () {
-      var el = $('#text');
-      var v = el.value;
+      var v = $('#text').value;
       if (!v) return;
-      command('/api/text', { text: v }).then(function (ok) {
-        if (ok) { el.value = ''; toast(t('sendOk')); }
-      });
+      sendText(v);
     });
     $('#text').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') $('#sendBtn').click();

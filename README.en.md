@@ -69,7 +69,7 @@ pairing and connection mode.
 | Feature | Description |
 |---|---|
 | Full keypad | D-pad, OK, Back, Home, Menu, Power, volume, mute |
-| Text input | Type on the phone and write into the box's focused field |
+| Text input | Type on the phone and write into the box's focused field; switching to direct or re-pairing keeps and automatically resends the draft, clearing it only after delivery |
 | App shortcuts | Dynamically lists every launchable third-party app with its real box icon; Settings is always first |
 | Air mouse | BT HID mode: tilt the phone to move the box cursor, OK acts as left click |
 | Touchpad | Direct mode with D-pad / Touch / Mouse segments: Touch maps your finger onto the box screen (tap exactly where you point), Mouse drags the box cursor; pick by box firmware capability |
@@ -282,7 +282,7 @@ Network requirements:
 | Menu | Opens recent tasks (no global Menu action without root) |
 | Power | Locks the box screen (not a real power off) |
 | Volume / Mute | Adjusts box media volume |
-| Text input | Writes into the focused editable field; fails if the current screen has none |
+| Text input | Writes into the focused editable field; switching to direct or re-pairing automatically sends the kept draft, which clears only on success and remains on failure/cancellation; fails if the current screen has no editable field |
 | App shortcuts | Dynamically lists every launchable third-party app on the box (name + real icon) |
 | Install APK (file) | Android app "Install APK" card picks a local APK, streams it to the box over HTTP, verifies the ZIP magic number, then launches the system installer |
 | Install APK (link) | Android app or web remote enters an APK download link; the box downloads it in the background and launches the system installer automatically; works on iOS / HarmonyOS / any browser |
@@ -414,6 +414,7 @@ Known limitations:
 - "Power" locks the screen; it cannot really power the box on/off. "Menu" opens recent tasks.
 - Volume changes only the box media volume, not the TV or an AV receiver.
 - Text input requires an editable field on the current screen and a box IME that accepts `ACTION_SET_TEXT`.
+  Drafts kept for a direct-mode switch or re-pairing live only in the current app/page process and must be entered again after it ends.
 - Some TV firmware does not support global DPAD actions (H96 / Android 12 in our tests); the app
   falls back to focus traversal, so direction keys do nothing on screens without focusable controls.
 - Bluetooth HID does not support text input or app shortcuts and needs the app in the foreground.

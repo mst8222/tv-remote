@@ -1170,8 +1170,10 @@ public class MainActivity extends Activity {
             String t = et.getText().toString().trim();
             if (t.isEmpty()) return;
             haptic();
-            doText(t);
-            et.setText("");
+            // SPEC-042：切换/配对/发送期间保留原文；成功后仅清理未被继续编辑的内容
+            doText(t, () -> {
+                if (t.equals(et.getText().toString().trim())) et.setText("");
+            });
         });
         r.addView(send);
         return r;
@@ -2412,14 +2414,16 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void doText(final String t) {
-        // SPEC-042：文字注入只有直连支持，通道不匹配时自动切换后再发送
+    private void doText(final String t, final Runnable onSent) {
+        // SPEC-042：文字注入只有直连支持；暂存动作捕获原文，通道就绪后直接续发
         ensureChannel(CH_LAN, () -> {
             worker.submit(() -> {
                 try {
                     lan.text(t);
                     setStatus(getString(R.string.lan_status, curHost()), true);
+                    runOnUiThread(onSent);
                 } catch (Exception e) {
+                    // 失败时输入框保留原文，用户无需重新输入
                     setStatus(Errors.friendly(this, e), false);
                 }
             });
